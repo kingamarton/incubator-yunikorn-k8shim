@@ -1,0 +1,13 @@
+apiVersion: v1
+entries:
+  yunikorn:
+  - apiVersion: v1
+    appVersion: 0.1.0
+    created: "2020-05-12T15:46:04.323137+02:00"
+    description: YuniKorn scheduler for Kubernetes
+    digest: 3076d8a56f78f21da2b99ca268d7c8c5e62dab65bec2e324562d771c014e7f17
+    name: yunikorn
+    urls:
+    - https://github.com/kingamarton/incubator-yunikorn-k8shim/releases/download/yunikorn-0.1.0/yunikorn-0.1.0.tgz
+    version: 0.1.0
+generated: "2020-05-12T15:46:03.087061+02:00"
