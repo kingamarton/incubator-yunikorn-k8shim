@@ -80,24 +80,30 @@ func GetQueueNameFromPod(pod *v1.Pod) string {
 }
 
 func GetApplicationIDFromPod(pod *v1.Pod) (string, error) {
-	for name, value := range pod.Labels {
-		// if a pod for spark already provided appID, reuse it
-		if name == common.SparkLabelAppID {
+	// application ID can be defined in annotations
+	for name, value := range pod.Annotations {
+		if name == common.LabelApplicationID {
 			return value, nil
 		}
+		if name == common.SparkAnnotationAppID {
+			return value, nil
+		}
+	}
+
+	// application ID can be defined in labels
+	for name, value := range pod.Labels {
 
 		// application ID can be defined as a label
 		if name == common.LabelApplicationID {
 			return value, nil
 		}
-	}
 
-	// application ID can be defined in annotations too
-	for name, value := range pod.Annotations {
-		if name == common.LabelApplicationID {
+		// if a pod for spark already provided appID, reuse it
+		if name == common.SparkLabelAppID {
 			return value, nil
 		}
 	}
+
 	return "", fmt.Errorf("unable to retrieve application ID from pod spec, %s",
 		pod.Spec.String())
 }
