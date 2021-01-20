@@ -23,10 +23,12 @@ import (
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/conf"
 	"github.com/apache/incubator-yunikorn-scheduler-interface/lib/go/si"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	corev1 "k8s.io/client-go/listers/core/v1"
 	storagev1 "k8s.io/client-go/listers/storage/v1"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/client/clientset/versioned/fake"
 )
 
 type MockedAPIProvider struct {
@@ -39,7 +41,6 @@ func NewMockedAPIProvider() *MockedAPIProvider {
 			Conf: &conf.SchedulerConf{
 				ClusterID:            "yk-test-cluster",
 				ClusterVersion:       "0.1",
-				SchedulerName:        "yunikorn",
 				PolicyGroup:          "queues",
 				Interval:             0,
 				KubeConfig:           "",
@@ -56,13 +57,16 @@ func NewMockedAPIProvider() *MockedAPIProvider {
 			},
 			KubeClient:        NewKubeClientMock(),
 			SchedulerAPI:      test.NewSchedulerAPIMock(),
+			AppClient:         fake.NewSimpleClientset(),
 			PodInformer:       nil,
 			NodeInformer:      test.NewMockedNodeInformer(),
-			ConfigMapInformer: nil,
+			ConfigMapInformer: test.NewMockedConfigMapInformer(),
 			PVInformer:        &MockedPersistentVolumeInformer{},
 			PVCInformer:       &MockedPersistentVolumeClaimInformer{},
 			StorageInformer:   &MockedStorageClassInformer{},
 			VolumeBinder:      nil,
+			AppInformer:       test.NewAppInformerMock(),
+			NamespaceInformer: test.NewMockNamespaceInformer(),
 		},
 	}
 }
@@ -96,6 +100,12 @@ func (m *MockedAPIProvider) MockBindFn(bfn func(pod *v1.Pod, hostID string) erro
 func (m *MockedAPIProvider) MockDeleteFn(dfn func(pod *v1.Pod) error) {
 	if mock, ok := m.clients.KubeClient.(*KubeClientMock); ok {
 		mock.deleteFn = dfn
+	}
+}
+
+func (m *MockedAPIProvider) MockCreateFn(cfn func(pod *v1.Pod) (*v1.Pod, error)) {
+	if mock, ok := m.clients.KubeClient.(*KubeClientMock); ok {
+		mock.createFn = cfn
 	}
 }
 

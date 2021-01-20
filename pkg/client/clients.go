@@ -21,12 +21,15 @@ package client
 import (
 	"time"
 
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/client/informers/externalversions/yunikorn.apache.org/v1alpha1"
+
 	"k8s.io/client-go/informers"
 	coreInformerV1 "k8s.io/client-go/informers/core/v1"
 	storageInformerV1 "k8s.io/client-go/informers/storage/v1"
 	"k8s.io/kubernetes/pkg/scheduler/volumebinder"
 
 	"github.com/apache/incubator-yunikorn-core/pkg/api"
+	appclient "github.com/apache/incubator-yunikorn-k8shim/pkg/client/clientset/versioned"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/utils"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/conf"
 )
@@ -41,6 +44,7 @@ type Clients struct {
 	// client apis
 	KubeClient   KubeClient
 	SchedulerAPI api.SchedulerAPI
+	AppClient    appclient.Interface
 
 	// informer factory
 	InformerFactory informers.SharedInformerFactory
@@ -52,6 +56,8 @@ type Clients struct {
 	PVInformer        coreInformerV1.PersistentVolumeInformer
 	PVCInformer       coreInformerV1.PersistentVolumeClaimInformer
 	StorageInformer   storageInformerV1.StorageClassInformer
+	NamespaceInformer coreInformerV1.NamespaceInformer
+	AppInformer       v1alpha1.ApplicationInformer
 
 	// volume binder handles PV/PVC related operations
 	VolumeBinder *volumebinder.VolumeBinder
@@ -65,7 +71,9 @@ func (c *Clients) WaitForSync(interval time.Duration, timeout time.Duration) err
 			c.PVCInformer.Informer().HasSynced() &&
 			c.PVInformer.Informer().HasSynced() &&
 			c.StorageInformer.Informer().HasSynced() &&
-			c.ConfigMapInformer.Informer().HasSynced()
+			c.ConfigMapInformer.Informer().HasSynced() &&
+			c.NamespaceInformer.Informer().HasSynced() &&
+			(c.AppInformer == nil || c.AppInformer.Informer().HasSynced())
 	}, interval, timeout)
 }
 
@@ -76,4 +84,8 @@ func (c *Clients) Run(stopCh <-chan struct{}) {
 	go c.PVCInformer.Informer().Run(stopCh)
 	go c.StorageInformer.Informer().Run(stopCh)
 	go c.ConfigMapInformer.Informer().Run(stopCh)
+	go c.NamespaceInformer.Informer().Run(stopCh)
+	if c.AppInformer != nil {
+		go c.AppInformer.Informer().Run(stopCh)
+	}
 }

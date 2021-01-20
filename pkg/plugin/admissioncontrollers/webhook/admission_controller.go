@@ -24,8 +24,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"strconv"
-	"time"
+	"strings"
 
 	"go.uber.org/zap"
 	"k8s.io/api/admission/v1beta1"
@@ -34,9 +35,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 
-	"github.com/apache/incubator-yunikorn-k8shim/pkg/common"
-	"github.com/apache/incubator-yunikorn-k8shim/pkg/conf"
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/constants"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/log"
+)
+
+const (
+	autoGenAppPrefix             = "yunikorn"
+	autoGenAppSuffix             = "autogen"
+	enableConfigHotRefreshEnvVar = "ENABLE_CONFIG_HOT_REFRESH"
 )
 
 var (
@@ -63,9 +69,10 @@ type ValidateConfResponse struct {
 
 func (c *admissionController) mutate(ar *v1beta1.AdmissionReview) *v1beta1.AdmissionResponse {
 	req := ar.Request
-	log.Logger.Info("AdmissionReview",
+	namespace := ar.Request.Namespace
+	log.Logger().Info("AdmissionReview",
 		zap.Any("Kind", req.Kind),
-		zap.String("Namespace", req.Namespace),
+		zap.String("Namespace", namespace),
 		zap.String("UID", string(req.UID)),
 		zap.String("Operation", string(req.Operation)),
 		zap.Any("UserInfo", req.UserInfo))
@@ -83,9 +90,9 @@ func (c *admissionController) mutate(ar *v1beta1.AdmissionReview) *v1beta1.Admis
 			}
 		}
 
-		if labelAppValue, ok := pod.Labels[common.LabelApp]; ok {
+		if labelAppValue, ok := pod.Labels[constants.LabelApp]; ok {
 			if labelAppValue == "yunikorn" {
-				log.Logger.Info("ignore yunikorn pod")
+				log.Logger().Info("ignore yunikorn pod")
 				return &v1beta1.AdmissionResponse{
 					Allowed: true,
 				}
@@ -93,7 +100,7 @@ func (c *admissionController) mutate(ar *v1beta1.AdmissionReview) *v1beta1.Admis
 		}
 
 		patch = updateSchedulerName(patch)
-		patch = updateLabels(&pod, patch)
+		patch = updateLabels(namespace, &pod, patch)
 	}
 
 	patchBytes, err := json.Marshal(patch)
@@ -117,28 +124,31 @@ func (c *admissionController) mutate(ar *v1beta1.AdmissionReview) *v1beta1.Admis
 }
 
 func updateSchedulerName(patch []patchOperation) []patchOperation {
-	log.Logger.Info("updating scheduler name")
+	log.Logger().Info("updating scheduler name")
 	return append(patch, patchOperation{
 		Op:    "add",
 		Path:  "/spec/schedulerName",
-		Value: conf.GetSchedulerConf().SchedulerName,
+		Value: constants.SchedulerName,
 	})
 }
 
-// the generated ID is using [PodName]_[Timestamp] naming convention.
-// the generated ID should be unique even the pod name is same (differ on nano time),
+// generate appID based on the namespace value,
 // and the max length of the ID is 63 chars.
-func generateAppID(podName string) string {
-	timestamp := strconv.FormatInt(time.Now().UnixNano(), 10)
-	generatedID := fmt.Sprintf("%.43s_%.19s", podName, timestamp)
-	return generatedID
+func generateAppID(namespace string) string {
+	ns := "default"
+	if namespace != "" {
+		ns = namespace
+	}
+	generatedID := fmt.Sprintf("%s-%s-%s", autoGenAppPrefix, ns, autoGenAppSuffix)
+	appID := fmt.Sprintf("%.63s", generatedID)
+	return appID
 }
 
-func updateLabels(pod *v1.Pod, patch []patchOperation) []patchOperation {
-	log.Logger.Info("updating pod labels",
+func updateLabels(namespace string, pod *v1.Pod, patch []patchOperation) []patchOperation {
+	log.Logger().Info("updating pod labels",
 		zap.String("podName", pod.Name),
 		zap.String("generateName", pod.GenerateName),
-		zap.String("namespace", pod.Namespace),
+		zap.String("namespace", namespace),
 		zap.Any("labels", pod.Labels))
 	existingLabels := pod.Labels
 	result := make(map[string]string)
@@ -146,29 +156,22 @@ func updateLabels(pod *v1.Pod, patch []patchOperation) []patchOperation {
 		result[k] = v
 	}
 
-	if _, ok := existingLabels[common.SparkLabelAppID]; !ok {
-		if _, ok := existingLabels[common.LabelApplicationID]; !ok {
+	if _, ok := existingLabels[constants.SparkLabelAppID]; !ok {
+		if _, ok := existingLabels[constants.LabelApplicationID]; !ok {
 			// if app id not exist, generate one
-			// pod's name can be generated, if name is not explicitly specified
-			// look for generateName instead
-			podName := "unknown"
-			if pod.Name != "" {
-				podName = pod.Name
-			} else if pod.GenerateName != "" {
-				podName = pod.GenerateName
-			}
-
-			generatedID := generateAppID(podName)
-			log.Logger.Debug("adding application ID",
+			// for each namespace, we group unnamed pods to one single app
+			// application ID convention: ${AUTO_GEN_PREFIX}-${NAMESPACE}-${AUTO_GEN_SUFFIX}
+			generatedID := generateAppID(namespace)
+			log.Logger().Debug("adding application ID",
 				zap.String("generatedID", generatedID))
-			result[common.LabelApplicationID] = generatedID
+			result[constants.LabelApplicationID] = generatedID
 		}
 	}
 
-	if _, ok := existingLabels[common.LabelQueueName]; !ok {
-		log.Logger.Debug("adding queue name",
+	if _, ok := existingLabels[constants.LabelQueueName]; !ok {
+		log.Logger().Debug("adding queue name",
 			zap.String("defaultQueue", "root.default"))
-		result[common.LabelQueueName] = "root.default"
+		result[constants.LabelQueueName] = "root.default"
 	}
 
 	patch = append(patch, patchOperation{
@@ -180,9 +183,32 @@ func updateLabels(pod *v1.Pod, patch []patchOperation) []patchOperation {
 	return patch
 }
 
+func isConfigMapUpdateAllowed(userInfo string) bool {
+	hotRefreshEnabled := os.Getenv(enableConfigHotRefreshEnvVar)
+	allowed, err := strconv.ParseBool(hotRefreshEnabled)
+	if err != nil {
+		log.Logger().Error("Failed to parse ENABLE_CONFIG_HOT_REFRESH value",
+			zap.String("ENABLE_CONFIG_HOT_REFRESH", hotRefreshEnabled))
+		return false
+	}
+	if allowed || strings.Contains(userInfo, "yunikorn-admin") {
+		return true
+	}
+	return false
+}
+
 func (c *admissionController) validateConf(ar *v1beta1.AdmissionReview) *v1beta1.AdmissionResponse {
 	req := ar.Request
-	log.Logger.Info("AdmissionReview",
+	if !isConfigMapUpdateAllowed(req.UserInfo.Username) {
+		return &v1beta1.AdmissionResponse{
+			Allowed: false,
+			Result: &metav1.Status{
+				Message: fmt.Sprintf("ConfigHotRefresh is disabled. " +
+					"Please use the REST API to update the configuration, or enable configHotRefresh"),
+			},
+		}
+	}
+	log.Logger().Info("AdmissionReview",
 		zap.Any("Kind", req.Kind),
 		zap.String("Namespace", req.Namespace),
 		zap.String("UID", string(req.UID)),
@@ -201,7 +227,7 @@ func (c *admissionController) validateConf(ar *v1beta1.AdmissionReview) *v1beta1
 		}
 		// validate new/updated config map
 		if err := c.validateConfigMap(&configmap); err != nil {
-			log.Logger.Error("failed to validate yunikorn configs", zap.Error(err))
+			log.Logger().Error("failed to validate yunikorn configs", zap.Error(err))
 			return &v1beta1.AdmissionResponse{
 				Allowed: false,
 				Result: &metav1.Status{
@@ -217,8 +243,8 @@ func (c *admissionController) validateConf(ar *v1beta1.AdmissionReview) *v1beta1
 }
 
 func (c *admissionController) validateConfigMap(cm *v1.ConfigMap) error {
-	if cm.Name == common.DefaultConfigMapName {
-		log.Logger.Info("validating yunikorn configs")
+	if cm.Name == constants.DefaultConfigMapName {
+		log.Logger().Info("validating yunikorn configs")
 		if content, ok := cm.Data[c.configName]; ok {
 			response, err := http.Post(c.schedulerValidateConfURL, "application/json", bytes.NewBuffer([]byte(content)))
 			if err != nil {
@@ -233,15 +259,18 @@ func (c *admissionController) validateConfigMap(cm *v1.ConfigMap) error {
 			if err := json.Unmarshal(responseBytes, &responseData); err != nil {
 				return err
 			}
-			return fmt.Errorf(responseData.Reason)
+			if !responseData.Allowed {
+				return fmt.Errorf(responseData.Reason)
+			}
+		} else {
+			return fmt.Errorf("required config '%s' not found in this configmap", c.configName)
 		}
-		return fmt.Errorf("required config '%s' not found in this configmap", c.configName)
 	}
 	return nil
 }
 
 func (c *admissionController) serve(w http.ResponseWriter, r *http.Request) {
-	log.Logger.Debug("request", zap.Any("httpRequest", r))
+	log.Logger().Debug("request", zap.Any("httpRequest", r))
 	var body []byte
 	if r.Body != nil {
 		if data, err := ioutil.ReadAll(r.Body); err == nil {
@@ -263,7 +292,7 @@ func (c *admissionController) serve(w http.ResponseWriter, r *http.Request) {
 	var admissionResponse *v1beta1.AdmissionResponse
 	ar := v1beta1.AdmissionReview{}
 	if _, _, err := deserializer.Decode(body, nil, &ar); err != nil {
-		log.Logger.Error("Can't decode the body", zap.Error(err))
+		log.Logger().Error("Can't decode the body", zap.Error(err))
 		admissionResponse = &v1beta1.AdmissionResponse{
 			Allowed: false,
 			Result: &metav1.Status{
@@ -289,7 +318,7 @@ func (c *admissionController) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("could not encode response: %v", err), http.StatusInternalServerError)
 	}
 
-	log.Logger.Info("writing response...")
+	log.Logger().Info("writing response...")
 	if _, err = w.Write(resp); err != nil {
 		http.Error(w, fmt.Sprintf("could not write response: %v", err), http.StatusInternalServerError)
 	}

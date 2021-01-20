@@ -20,7 +20,7 @@ package general
 
 import (
 	"go.uber.org/zap"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
 	k8sCache "k8s.io/client-go/tools/cache"
@@ -28,6 +28,7 @@ import (
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/appmgmt/interfaces"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/client"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common"
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/constants"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/utils"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/log"
 	"github.com/apache/incubator-yunikorn-scheduler-interface/lib/go/si"
@@ -83,21 +84,26 @@ func (os *Manager) Stop() {
 func (os *Manager) getTaskMetadata(pod *v1.Pod) (interfaces.TaskMetadata, bool) {
 	appId, err := utils.GetApplicationIDFromPod(pod)
 	if err != nil {
-		log.Logger.Debug("unable to get task by given pod", zap.Error(err))
+		log.Logger().Debug("unable to get task by given pod", zap.Error(err))
 		return interfaces.TaskMetadata{}, false
 	}
+
+	placeholder := utils.GetPlaceholderFlagFromPodSpec(pod)
+	taskGroupName := utils.GetTaskGroupFromPodSpec(pod)
 
 	return interfaces.TaskMetadata{
 		ApplicationID: appId,
 		TaskID:        string(pod.UID),
 		Pod:           pod,
+		Placeholder:   placeholder,
+		TaskGroupName: taskGroupName,
 	}, true
 }
 
 func (os *Manager) getAppMetadata(pod *v1.Pod) (interfaces.ApplicationMetadata, bool) {
 	appId, err := utils.GetApplicationIDFromPod(pod)
 	if err != nil {
-		log.Logger.Debug("unable to get application by given pod", zap.Error(err))
+		log.Logger().Debug("unable to get application by given pod", zap.Error(err))
 		return interfaces.ApplicationMetadata{}, false
 	}
 
@@ -106,18 +112,24 @@ func (os *Manager) getAppMetadata(pod *v1.Pod) (interfaces.ApplicationMetadata, 
 	// user info is retrieved via service account
 	tags := map[string]string{}
 	if pod.Namespace == "" {
-		tags["namespace"] = "default"
+		tags[constants.AppTagNamespace] = constants.DefaultAppNamespace
 	} else {
-		tags["namespace"] = pod.Namespace
+		tags[constants.AppTagNamespace] = pod.Namespace
 	}
 	// get the application owner (this is all that is available as far as we can find)
 	user := pod.Spec.ServiceAccountName
+
+	taskGroups, err := utils.GetTaskGroupsFromAnnotation(pod)
+	if err != nil {
+		log.Logger().Error("unable to get taskGroups by given pod", zap.Error(err))
+	}
 
 	return interfaces.ApplicationMetadata{
 		ApplicationID: appId,
 		QueueName:     utils.GetQueueNameFromPod(pod),
 		User:          user,
 		Tags:          tags,
+		TaskGroups:    taskGroups,
 	}, true
 }
 
@@ -141,18 +153,18 @@ func (os *Manager) filterPods(obj interface{}) bool {
 func (os *Manager) addPod(obj interface{}) {
 	pod, err := utils.Convert2Pod(obj)
 	if err != nil {
-		log.Logger.Error("failed to add pod", zap.Error(err))
+		log.Logger().Error("failed to add pod", zap.Error(err))
 		return
 	}
 
 	recovery, err := utils.NeedRecovery(pod)
 	if err != nil {
-		log.Logger.Error("we can't tell to add or recover this pod",
+		log.Logger().Error("we can't tell to add or recover this pod",
 			zap.Error(err))
 		return
 	}
 
-	log.Logger.Debug("pod added",
+	log.Logger().Debug("pod added",
 		zap.String("appType", os.Name()),
 		zap.String("Name", pod.Name),
 		zap.String("Namespace", pod.Namespace),
@@ -187,13 +199,13 @@ func (os *Manager) addPod(obj interface{}) {
 func (os *Manager) updatePod(old, new interface{}) {
 	oldPod, err := utils.Convert2Pod(old)
 	if err != nil {
-		log.Logger.Error("expecting a pod object", zap.Error(err))
+		log.Logger().Error("expecting a pod object", zap.Error(err))
 		return
 	}
 
 	newPod, err := utils.Convert2Pod(new)
 	if err != nil {
-		log.Logger.Error("expecting a pod object", zap.Error(err))
+		log.Logger().Error("expecting a pod object", zap.Error(err))
 		return
 	}
 
@@ -203,7 +215,7 @@ func (os *Manager) updatePod(old, new interface{}) {
 		// and these container won't be restarted. In this case, we can safely release
 		// the resources for this allocation. And mark the task is done.
 		if utils.IsPodTerminated(newPod) {
-			log.Logger.Info("task completes",
+			log.Logger().Info("task completes",
 				zap.String("appType", os.Name()),
 				zap.String("namespace", newPod.Namespace),
 				zap.String("podName", newPod.Name),
@@ -233,15 +245,15 @@ func (os *Manager) deletePod(obj interface{}) {
 		var err error
 		pod, err = utils.Convert2Pod(t.Obj)
 		if err != nil {
-			log.Logger.Error(err.Error())
+			log.Logger().Error(err.Error())
 			return
 		}
 	default:
-		log.Logger.Error("cannot convert to pod")
+		log.Logger().Error("cannot convert to pod")
 		return
 	}
 
-	log.Logger.Info("delete pod",
+	log.Logger().Info("delete pod",
 		zap.String("appType", os.Name()),
 		zap.String("namespace", pod.Namespace),
 		zap.String("podName", pod.Name),
@@ -257,7 +269,7 @@ func (os *Manager) deletePod(obj interface{}) {
 func (os *Manager) ListApplications() (map[string]interfaces.ApplicationMetadata, error) {
 	// selector: applicationID exist
 	slt := labels.NewSelector()
-	req, err := labels.NewRequirement(common.LabelApplicationID, selection.Exists, nil)
+	req, err := labels.NewRequirement(constants.LabelApplicationID, selection.Exists, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -290,15 +302,22 @@ func (os *Manager) ListApplications() (map[string]interfaces.ApplicationMetadata
 
 func (os *Manager) GetExistingAllocation(pod *v1.Pod) *si.Allocation {
 	if meta, valid := os.getAppMetadata(pod); valid {
+		// when submit a task, we use pod UID as the allocationKey,
+		// to keep consistent, during recovery, the pod UID is also used
+		// for an Allocation.
+		placeholder := utils.GetPlaceholderFlagFromPodSpec(pod)
+		taskGroupName := utils.GetTaskGroupFromPodSpec(pod)
 		return &si.Allocation{
-			AllocationKey:    pod.Name,
+			AllocationKey:    string(pod.UID),
 			AllocationTags:   meta.Tags,
 			UUID:             string(pod.UID),
 			ResourcePerAlloc: common.GetPodResource(pod),
 			QueueName:        meta.QueueName,
 			NodeID:           pod.Spec.NodeName,
 			ApplicationID:    meta.ApplicationID,
-			PartitionName:    common.DefaultPartition,
+			Placeholder:      placeholder,
+			TaskGroupName:    taskGroupName,
+			PartitionName:    constants.DefaultPartition,
 		}
 	}
 	return nil

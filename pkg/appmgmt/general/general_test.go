@@ -22,13 +22,27 @@ import (
 	"testing"
 
 	"gotest.tools/assert"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	apis "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/cache"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/client"
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/constants"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/events"
 )
+
+const taskGroupInfo = `
+[
+	{
+		"name": "test-group-1",
+		"minMember": 3,
+		"minResource": {
+			"cpu": 2,
+			"memory": "1Gi"
+		}
+	}
+]`
 
 func TestGetAppMetadata(t *testing.T) {
 	am := NewManager(cache.NewMockedAMProtocol(), client.NewMockedAPIProvider())
@@ -46,8 +60,11 @@ func TestGetAppMetadata(t *testing.T) {
 				"applicationId": "app00001",
 				"queue":         "root.a",
 			},
+			Annotations: map[string]string{
+				constants.AnnotationTaskGroups: taskGroupInfo,
+			},
 		},
-		Spec: v1.PodSpec{SchedulerName: "yunikorn"},
+		Spec: v1.PodSpec{SchedulerName: constants.SchedulerName},
 		Status: v1.PodStatus{
 			Phase: v1.PodPending,
 		},
@@ -59,6 +76,10 @@ func TestGetAppMetadata(t *testing.T) {
 	assert.Equal(t, app.QueueName, "root.a")
 	assert.Equal(t, app.User, "")
 	assert.DeepEqual(t, app.Tags, map[string]string{"namespace": "default"})
+	assert.Equal(t, app.TaskGroups[0].Name, "test-group-1")
+	assert.Equal(t, app.TaskGroups[0].MinMember, int32(3))
+	assert.Equal(t, app.TaskGroups[0].MinResource["cpu"], resource.MustParse("2"))
+	assert.Equal(t, app.TaskGroups[0].MinResource["memory"], resource.MustParse("1Gi"))
 
 	pod = v1.Pod{
 		TypeMeta: apis.TypeMeta{
@@ -75,7 +96,7 @@ func TestGetAppMetadata(t *testing.T) {
 			},
 		},
 		Spec: v1.PodSpec{
-			SchedulerName:      "yunikorn",
+			SchedulerName:      constants.SchedulerName,
 			ServiceAccountName: "bob",
 		},
 		Status: v1.PodStatus{
@@ -89,6 +110,7 @@ func TestGetAppMetadata(t *testing.T) {
 	assert.Equal(t, app.QueueName, "root.b")
 	assert.Equal(t, app.User, "bob")
 	assert.DeepEqual(t, app.Tags, map[string]string{"namespace": "app-namespace-01"})
+	assert.DeepEqual(t, len(app.TaskGroups), 0)
 
 	pod = v1.Pod{
 		TypeMeta: apis.TypeMeta{
@@ -101,7 +123,7 @@ func TestGetAppMetadata(t *testing.T) {
 			UID:       "UID-POD-00001",
 		},
 		Spec: v1.PodSpec{
-			SchedulerName:      "yunikorn",
+			SchedulerName:      constants.SchedulerName,
 			ServiceAccountName: "bob",
 		},
 		Status: v1.PodStatus{
@@ -129,8 +151,11 @@ func TestGetTaskMetadata(t *testing.T) {
 				"applicationId": "app00001",
 				"queue":         "root.a",
 			},
+			Annotations: map[string]string{
+				constants.AnnotationTaskGroupName: "test-group-01",
+			},
 		},
-		Spec: v1.PodSpec{SchedulerName: "yunikorn"},
+		Spec: v1.PodSpec{SchedulerName: constants.SchedulerName},
 		Status: v1.PodStatus{
 			Phase: v1.PodPending,
 		},
@@ -140,6 +165,11 @@ func TestGetTaskMetadata(t *testing.T) {
 	assert.Equal(t, ok, true)
 	assert.Equal(t, task.ApplicationID, "app00001")
 	assert.Equal(t, task.TaskID, "UID-POD-00001")
+	assert.Equal(t, task.TaskGroupName, "test-group-01")
+	pod.Annotations = map[string]string{}
+	task, ok = am.getTaskMetadata(&pod)
+	assert.Equal(t, ok, true)
+	assert.Equal(t, task.TaskGroupName, "")
 
 	pod = v1.Pod{
 		TypeMeta: apis.TypeMeta{
@@ -151,7 +181,7 @@ func TestGetTaskMetadata(t *testing.T) {
 			Namespace: "default",
 			UID:       "UID-POD-00001",
 		},
-		Spec: v1.PodSpec{SchedulerName: "yunikorn"},
+		Spec: v1.PodSpec{SchedulerName: constants.SchedulerName},
 		Status: v1.PodStatus{
 			Phase: v1.PodPending,
 		},
@@ -178,7 +208,7 @@ func TestAddPod(t *testing.T) {
 				"queue":         "root.a",
 			},
 		},
-		Spec: v1.PodSpec{SchedulerName: "yunikorn"},
+		Spec: v1.PodSpec{SchedulerName: constants.SchedulerName},
 		Status: v1.PodStatus{
 			Phase: v1.PodPending,
 		},
@@ -215,7 +245,7 @@ func TestAddPod(t *testing.T) {
 				"queue":         "root.a",
 			},
 		},
-		Spec: v1.PodSpec{SchedulerName: "yunikorn"},
+		Spec: v1.PodSpec{SchedulerName: constants.SchedulerName},
 		Status: v1.PodStatus{
 			Phase: v1.PodPending,
 		},
@@ -239,7 +269,7 @@ func TestAddPod(t *testing.T) {
 				"queue":         "root.a",
 			},
 		},
-		Spec: v1.PodSpec{SchedulerName: "yunikorn"},
+		Spec: v1.PodSpec{SchedulerName: constants.SchedulerName},
 		Status: v1.PodStatus{
 			Phase: v1.PodPending,
 		},
@@ -272,7 +302,7 @@ func TestUpdatePodWhenSucceed(t *testing.T) {
 				"queue":         "root.a",
 			},
 		},
-		Spec: v1.PodSpec{SchedulerName: "yunikorn"},
+		Spec: v1.PodSpec{SchedulerName: constants.SchedulerName},
 		Status: v1.PodStatus{
 			Phase: v1.PodPending,
 		},
@@ -310,7 +340,7 @@ func TestUpdatePodWhenSucceed(t *testing.T) {
 				"queue":         "root.a",
 			},
 		},
-		Spec: v1.PodSpec{SchedulerName: "yunikorn"},
+		Spec: v1.PodSpec{SchedulerName: constants.SchedulerName},
 		Status: v1.PodStatus{
 			Phase: v1.PodSucceeded,
 		},
@@ -339,7 +369,7 @@ func TestUpdatePodWhenFailed(t *testing.T) {
 				"queue":         "root.a",
 			},
 		},
-		Spec: v1.PodSpec{SchedulerName: "yunikorn"},
+		Spec: v1.PodSpec{SchedulerName: constants.SchedulerName},
 		Status: v1.PodStatus{
 			Phase: v1.PodPending,
 		},
@@ -363,7 +393,7 @@ func TestUpdatePodWhenFailed(t *testing.T) {
 				"queue":         "root.a",
 			},
 		},
-		Spec: v1.PodSpec{SchedulerName: "yunikorn"},
+		Spec: v1.PodSpec{SchedulerName: constants.SchedulerName},
 		Status: v1.PodStatus{
 			Phase: v1.PodSucceeded,
 		},
@@ -398,7 +428,7 @@ func TestDeletePod(t *testing.T) {
 				"queue":         "root.a",
 			},
 		},
-		Spec: v1.PodSpec{SchedulerName: "yunikorn"},
+		Spec: v1.PodSpec{SchedulerName: constants.SchedulerName},
 		Status: v1.PodStatus{
 			Phase: v1.PodPending,
 		},
@@ -432,4 +462,39 @@ func toApplication(something interface{}) (*cache.Application, bool) {
 		return app, true
 	}
 	return nil, false
+}
+
+func TestGetExistingAllocation(t *testing.T) {
+	am := NewManager(cache.NewMockedAMProtocol(), client.NewMockedAPIProvider())
+
+	pod := &v1.Pod{
+		TypeMeta: apis.TypeMeta{
+			Kind:       "Pod",
+			APIVersion: "v1",
+		},
+		ObjectMeta: apis.ObjectMeta{
+			Name:      "pod00001",
+			Namespace: "default",
+			UID:       "UID-POD-00001",
+			Labels: map[string]string{
+				"applicationId": "app00001",
+				"queue":         "root.a",
+			},
+		},
+		Spec: v1.PodSpec{
+			SchedulerName: constants.SchedulerName,
+			NodeName:      "allocated-node",
+		},
+		Status: v1.PodStatus{
+			Phase: v1.PodPending,
+		},
+	}
+
+	// verifies the existing allocation is correctly returned
+	alloc := am.GetExistingAllocation(pod)
+	assert.Equal(t, alloc.ApplicationID, "app00001")
+	assert.Equal(t, alloc.QueueName, "root.a")
+	assert.Equal(t, alloc.AllocationKey, string(pod.UID))
+	assert.Equal(t, alloc.UUID, string(pod.UID))
+	assert.Equal(t, alloc.NodeID, "allocated-node")
 }

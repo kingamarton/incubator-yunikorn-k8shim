@@ -24,10 +24,11 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/appmgmt/interfaces"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/events"
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/utils"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/dispatcher"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/log"
 	"github.com/apache/incubator-yunikorn-scheduler-interface/lib/go/si"
@@ -37,44 +38,53 @@ import (
 )
 
 type Task struct {
-	taskID         string
-	alias          string
-	applicationID  string
-	application    *Application
-	allocationUUID string
-	resource       *si.Resource
-	pod            *v1.Pod
-	context        *Context
-	nodeName       string
-	sm             *fsm.FSM
-	lock           *sync.RWMutex
+	taskID          string
+	alias           string
+	applicationID   string
+	application     *Application
+	allocationUUID  string
+	resource        *si.Resource
+	pod             *v1.Pod
+	context         *Context
+	nodeName        string
+	createTime      time.Time
+	taskGroupName   string
+	placeholder     bool
+	terminationType string
+	sm              *fsm.FSM
+	lock            *sync.RWMutex
 }
 
-func NewTask(tid string, app *Application, ctx *Context, pod *v1.Pod) Task {
+func NewTask(tid string, app *Application, ctx *Context, pod *v1.Pod) *Task {
 	taskResource := common.GetPodResource(pod)
-	return createTaskInternal(tid, app, taskResource, pod, ctx)
+	return createTaskInternal(tid, app, taskResource, pod, false, "", ctx)
 }
 
-// test only
-func CreateTaskForTest(tid string, app *Application, resource *si.Resource, ctx *Context) Task {
-	// for testing purpose, the pod name is same as the taskID
-	taskPod := &v1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: tid,
-		},
-	}
-	return createTaskInternal(tid, app, resource, taskPod, ctx)
+func NewFromTaskMeta(tid string, app *Application, ctx *Context, metadata interfaces.TaskMetadata) *Task {
+	taskPod := metadata.Pod
+	taskResource := common.GetPodResource(taskPod)
+	return createTaskInternal(
+		tid,
+		app,
+		taskResource,
+		metadata.Pod,
+		metadata.Placeholder,
+		metadata.TaskGroupName,
+		ctx)
 }
 
 func createTaskInternal(tid string, app *Application, resource *si.Resource,
-	pod *v1.Pod, ctx *Context) Task {
-	task := Task{
+	pod *v1.Pod, placeholder bool, taskGroupName string, ctx *Context) *Task {
+	task := &Task{
 		taskID:        tid,
 		alias:         fmt.Sprintf("%s/%s", pod.Namespace, pod.Name),
 		applicationID: app.GetApplicationID(),
 		application:   app,
 		pod:           pod,
 		resource:      resource,
+		createTime:    pod.GetCreationTimestamp().Time,
+		placeholder:   placeholder,
+		taskGroupName: taskGroupName,
 		context:       ctx,
 		lock:          &sync.RWMutex{},
 	}
@@ -119,9 +129,14 @@ func createTaskInternal(tid string, app *Application, resource *si.Resource,
 			states.Rejected:                 task.postTaskRejected,
 			beforeHook(events.CompleteTask): task.beforeTaskCompleted,
 			states.Failed:                   task.postTaskFailed,
+			states.Bound:                    task.postTaskBound,
 			events.EnterState:               task.enterState,
 		},
 	)
+
+	if tgName := utils.GetTaskGroupFromPodSpec(pod); tgName != "" {
+		task.taskGroupName = tgName
+	}
 
 	return task
 }
@@ -134,18 +149,11 @@ func beforeHook(event events.TaskEventType) string {
 func (task *Task) handle(te events.TaskEvent) error {
 	task.lock.Lock()
 	defer task.lock.Unlock()
-	log.Logger.Debug("task state transition",
-		zap.String("taskID", task.taskID),
-		zap.String("preState", task.sm.Current()),
-		zap.String("pendingEvent", string(te.GetEvent())))
 	err := task.sm.Event(string(te.GetEvent()), te.GetArgs()...)
 	// handle the same state transition not nil error (limit of fsm).
 	if err != nil && err.Error() != "no transition" {
 		return err
 	}
-	log.Logger.Debug("task state transition",
-		zap.String("taskID", task.taskID),
-		zap.String("postState", task.sm.Current()))
 	return nil
 }
 
@@ -167,14 +175,58 @@ func (task *Task) GetTaskID() string {
 	return task.taskID
 }
 
+func (task *Task) GetTaskPlaceholder() bool {
+	task.lock.RLock()
+	defer task.lock.RUnlock()
+	return task.placeholder
+}
+
 func (task *Task) GetTaskState() string {
 	// fsm has its own internal lock, we don't need to hold node's lock here
 	return task.sm.Current()
 }
 
-func (task *Task) setAllocated(nodeName string) {
+func (task *Task) setTaskGroupName(groupName string) {
 	task.lock.Lock()
 	defer task.lock.Unlock()
+	task.taskGroupName = groupName
+}
+
+func (task *Task) setTaskTerminationType(terminationTyp string) {
+	task.lock.Lock()
+	defer task.lock.Unlock()
+	task.terminationType = terminationTyp
+}
+
+func (task *Task) getTaskGroupName() string {
+	task.lock.RLock()
+	defer task.lock.RUnlock()
+	return task.taskGroupName
+}
+
+func (task *Task) getTaskAllocationUUID() string {
+	task.lock.RLock()
+	defer task.lock.RUnlock()
+	return task.allocationUUID
+}
+
+func (task *Task) DeleteTaskPod(pod *v1.Pod) error {
+	return task.context.apiProvider.GetAPIs().KubeClient.Delete(task.pod)
+}
+
+func (task *Task) isTerminated() bool {
+	for _, states := range events.States().Task.Terminated {
+		if task.GetTaskState() == states {
+			return true
+		}
+	}
+	return false
+}
+
+func (task *Task) setAllocated(nodeName, allocationUUID string) {
+	task.lock.Lock()
+	defer task.lock.Unlock()
+	task.allocationUUID = allocationUUID
 	task.nodeName = nodeName
 	task.sm.SetState(events.States().Task.Allocated)
 }
@@ -188,59 +240,31 @@ func (task *Task) handleFailEvent(event *fsm.Event) {
 		return
 	}
 
-	log.Logger.Error("task failed",
+	log.Logger().Error("task failed",
 		zap.String("appID", task.applicationID),
 		zap.String("taskID", task.taskID),
 		zap.String("reason", eventArgs[0]))
 }
 
 func (task *Task) handleSubmitTaskEvent(event *fsm.Event) {
-	log.Logger.Debug("scheduling pod",
+	log.Logger().Debug("scheduling pod",
 		zap.String("podName", task.pod.Name))
 	// convert the request
-	rr := common.CreateUpdateRequestForTask(task.applicationID, task.taskID, task.resource)
-	log.Logger.Debug("send update request", zap.String("request", rr.String()))
+	rr := common.CreateUpdateRequestForTask(
+		task.applicationID,
+		task.taskID,
+		task.resource,
+		task.placeholder,
+		task.taskGroupName,
+		task.pod)
+	log.Logger().Debug("send update request", zap.String("request", rr.String()))
 	if err := task.context.apiProvider.GetAPIs().SchedulerAPI.Update(&rr); err != nil {
-		log.Logger.Debug("failed to send scheduling request to scheduler", zap.Error(err))
+		log.Logger().Debug("failed to send scheduling request to scheduler", zap.Error(err))
 		return
 	}
 
 	events.GetRecorder().Eventf(task.pod, v1.EventTypeNormal, "Scheduling",
 		"%s is queued and waiting for allocation", task.alias)
-
-	// after a small amount of time, if the task is still not able to get allocation,
-	// put the pod to unscheduable state. This will trigger the cluster-auto-scaler to launch
-	// the auto-scaling process.
-	// TODO improve this
-	// Note, this approach is suboptimal, when a task cannot be allocated, it doesn't always
-	// mean it needs the nodes to scale up. E.g task runs out of max capacity of the queue,
-	// user/app runs out of the limit etc. Ideally, we should add more interactions between
-	// core and shim to negotiate on when to set the state to unscheduable and trigger the
-	// auto-scaling appropriately.
-	time.AfterFunc(3*time.Second, func() {
-		if task.GetTaskState() == events.States().Task.Scheduling {
-			log.Logger.Debug("updating pod state ",
-				zap.String("appID", task.applicationID),
-				zap.String("taskID", task.taskID),
-				zap.String("podName", task.alias),
-				zap.String("state", "Unscheduable"))
-			// if task state is still pending after 5s,
-			// move task to un-schedule-able state.
-			if err := task.context.updatePodCondition(task.pod,
-				&v1.PodCondition{
-					Type:    v1.PodScheduled,
-					Status:  v1.ConditionFalse,
-					Reason:  v1.PodReasonUnschedulable,
-					Message: "pod is unable to be scheduled due to lack of resources",
-				}); err != nil {
-				log.Logger.Error("update pod condition failed",
-					zap.Error(err))
-			}
-			events.GetRecorder().Eventf(task.pod,
-				v1.EventTypeNormal, "PodUnscheduable",
-				"Task %s state changes to Unscheduable", task.alias)
-		}
-	})
 }
 
 // this is called after task reaches PENDING state,
@@ -268,7 +292,7 @@ func (task *Task) postTaskAllocated(event *fsm.Event) {
 		eventArgs := make([]string, 2)
 		if err := events.GetEventArgsAsStrings(eventArgs, event.Args); err != nil {
 			errorMessage = err.Error()
-			log.Logger.Error("error", zap.Error(err))
+			log.Logger().Error("error", zap.Error(err))
 			dispatcher.Dispatch(NewFailTaskEvent(task.applicationID, task.taskID, errorMessage))
 			return
 		}
@@ -285,7 +309,7 @@ func (task *Task) postTaskAllocated(event *fsm.Event) {
 		task.allocationUUID = allocUUID
 
 		// before binding pod to node, first bind volumes to pod
-		log.Logger.Debug("bind pod volumes",
+		log.Logger().Debug("bind pod volumes",
 			zap.String("podName", task.pod.Name),
 			zap.String("podUID", string(task.pod.UID)))
 		if task.context.apiProvider.GetAPIs().VolumeBinder != nil {
@@ -298,25 +322,35 @@ func (task *Task) postTaskAllocated(event *fsm.Event) {
 			}
 		}
 
-		log.Logger.Debug("bind pod",
+		log.Logger().Debug("bind pod",
 			zap.String("podName", task.pod.Name),
 			zap.String("podUID", string(task.pod.UID)))
 
 		if err := task.context.apiProvider.GetAPIs().KubeClient.Bind(task.pod, nodeID); err != nil {
 			errorMessage = fmt.Sprintf("bind pod volumes failed, name: %s, %s", task.alias, err.Error())
-			log.Logger.Error(errorMessage)
+			log.Logger().Error(errorMessage)
 			dispatcher.Dispatch(NewFailTaskEvent(task.applicationID, task.taskID, errorMessage))
 			events.GetRecorder().Eventf(task.pod,
 				v1.EventTypeWarning, "PodBindFailure", errorMessage)
 			return
 		}
 
-		log.Logger.Info("successfully bound pod", zap.String("podName", task.pod.Name))
+		log.Logger().Info("successfully bound pod", zap.String("podName", task.pod.Name))
 		dispatcher.Dispatch(NewBindTaskEvent(task.applicationID, task.taskID))
 		events.GetRecorder().Eventf(task.pod,
 			v1.EventTypeNormal, "PodBindSuccessful",
 			"Pod %s is successfully bound to node %s", task.alias, nodeID)
 	}(event)
+}
+
+func (task *Task) postTaskBound(event *fsm.Event) {
+	if task.placeholder {
+		log.Logger().Info("placeholder is bound",
+			zap.String("appID", task.applicationID),
+			zap.String("taskName", task.alias),
+			zap.String("taskGroupName", task.taskGroupName))
+		dispatcher.Dispatch(NewUpdateApplicationReservationEvent(task.applicationID))
+	}
 }
 
 func (task *Task) postTaskRejected(event *fsm.Event) {
@@ -355,11 +389,13 @@ func (task *Task) beforeTaskCompleted(event *fsm.Event) {
 func (task *Task) releaseAllocation() {
 	// scheduler api might be nil in some tests
 	if task.context.apiProvider.GetAPIs().SchedulerAPI != nil {
-		log.Logger.Debug("prepare to send release request",
+		log.Logger().Debug("prepare to send release request",
 			zap.String("applicationID", task.applicationID),
 			zap.String("taskID", task.taskID),
 			zap.String("taskAlias", task.alias),
-			zap.String("task", task.GetTaskState()))
+			zap.String("allocationUUID", task.allocationUUID),
+			zap.String("task", task.GetTaskState()),
+			zap.String("terminationType", task.terminationType))
 
 		// depends on current task state, generate requests accordingly.
 		// if task is already allocated, which means the scheduler core already,
@@ -372,17 +408,31 @@ func (task *Task) releaseAllocation() {
 			releaseRequest = common.CreateReleaseAskRequestForTask(
 				task.applicationID, task.taskID, task.application.partition)
 		default:
+			// sending empty allocation UUID back to scheduler-core is dangerous
+			// log a warning and skip the release request. this may leak some resource
+			// in the scheduler, collect logs and check why this happens.
+			if task.allocationUUID == "" {
+				log.Logger().Warn("task allocation UUID is empty, sending this release request "+
+					"to yunikorn-core could cause all allocations of this app get released. skip this "+
+					"request, this may cause some resource leak. check the logs for more info!",
+					zap.String("applicationID", task.applicationID),
+					zap.String("taskID", task.taskID),
+					zap.String("taskAlias", task.alias),
+					zap.String("allocationUUID", task.allocationUUID),
+					zap.String("task", task.GetTaskState()))
+				return
+			}
 			releaseRequest = common.CreateReleaseAllocationRequestForTask(
-				task.applicationID, task.allocationUUID, task.application.partition)
+				task.applicationID, task.allocationUUID, task.application.partition, task.terminationType)
 		}
 
 		if releaseRequest.Releases != nil {
-			log.Logger.Info("releasing allocations",
+			log.Logger().Info("releasing allocations",
 				zap.Int("numOfAsksToRelease", len(releaseRequest.Releases.AllocationAsksToRelease)),
 				zap.Int("numOfAllocationsToRelease", len(releaseRequest.Releases.AllocationsToRelease)))
 		}
 		if err := task.context.apiProvider.GetAPIs().SchedulerAPI.Update(&releaseRequest); err != nil {
-			log.Logger.Debug("failed to send scheduling request to scheduler", zap.Error(err))
+			log.Logger().Debug("failed to send scheduling request to scheduler", zap.Error(err))
 		}
 	}
 }
@@ -401,7 +451,7 @@ func (task *Task) sanityCheckBeforeScheduling() error {
 			continue
 		}
 		pvcName := volume.PersistentVolumeClaim.ClaimName
-		log.Logger.Debug("checking PVC", zap.String("name", pvcName))
+		log.Logger().Debug("checking PVC", zap.String("name", pvcName))
 		pvc, err := task.context.apiProvider.GetAPIs().PVCInformer.Lister().PersistentVolumeClaims(namespace).Get(pvcName)
 		if err != nil {
 			return err
@@ -414,9 +464,11 @@ func (task *Task) sanityCheckBeforeScheduling() error {
 }
 
 func (task *Task) enterState(event *fsm.Event) {
-	log.Logger.Info("task state",
-		zap.String("appID", task.applicationID),
-		zap.String("taskID", task.taskID),
+	log.Logger().Debug("shim task state transition",
+		zap.String("app", task.applicationID),
+		zap.String("task", task.taskID),
 		zap.String("taskAlias", task.alias),
-		zap.String("state", task.GetTaskState()))
+		zap.String("source", event.Src),
+		zap.String("destination", event.Dst),
+		zap.String("event", event.Event))
 }

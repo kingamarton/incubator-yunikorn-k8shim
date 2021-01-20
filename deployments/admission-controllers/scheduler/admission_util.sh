@@ -33,6 +33,9 @@ fi
 if [ -z "$NAMESPACE" ]; then
   NAMESPACE=`cat ${CONF_FILE} | grep ^namespace | cut -d "=" -f 2`
 fi
+if [ -z "$SERVICE_ACCOUNT_NAME" ]; then
+  SERVICE_ACCOUNT_NAME=`cat ${CONF_FILE} | grep ^schedulerServiceAccountName | cut -d "=" -f 2`
+fi
 if [ -z "$POLICY_GROUP" ]; then
   POLICY_GROUP=`cat ${CONF_FILE} | grep ^policyGroup | cut -d "=" -f 2`
 fi
@@ -43,7 +46,18 @@ REGISTERED_ADMISSIONS=${REGISTERED_ADMISSIONS//,/ }
 if [ -z "$SCHEDULER_SERVICE_NAME" ]; then
   SCHEDULER_SERVICE_NAME=`cat ${CONF_FILE} | grep ^schedulerServiceName | cut -d "=" -f 2`
 fi
-
+if [ -z "$ADMISSION_CONTROLLER_IMAGE_REGISTRY" ]; then
+  ADMISSION_CONTROLLER_IMAGE_REGISTRY=`cat ${CONF_FILE} | grep ^dockerImageRegistry | cut -d "=" -f 2`
+fi
+if [ -z "$ADMISSION_CONTROLLER_IMAGE_TAG" ]; then
+  ADMISSION_CONTROLLER_IMAGE_TAG=`cat ${CONF_FILE} | grep ^dockerImageTag | cut -d "=" -f 2`
+fi
+if [ -z "$ADMISSION_CONTROLLER_IMAGE_PULL_POLICY" ]; then
+  ADMISSION_CONTROLLER_IMAGE_PULL_POLICY=`cat ${CONF_FILE} | grep ^dockerImagePullPolicy | cut -d "=" -f 2`
+fi
+if [ -z "$ENABLE_CONFIG_HOT_REFRESH" ]; then
+  ENABLE_CONFIG_HOT_REFRESH=`cat ${CONF_FILE} | grep ^enableConfigHotRefresh | cut -d "=" -f 2`
+fi
 delete_resources() {
   kubectl delete -f server.yaml
   # cleanup admissions
@@ -115,12 +129,32 @@ create_resources() {
           --from-file=cert.pem=${KEY_DIR}/server-cert.pem \
           --namespace=${NAMESPACE}
 
+  # clean up local key and cert files
+  rm -rf ${KEY_DIR}
+
   # Replace the certificate in the template with a valid CA parsed from security tokens
   ca_pem_b64=$(kubectl get secret -o jsonpath="{.items[?(@.type==\"kubernetes.io/service-account-token\")].data['ca\.crt']}" | cut -d " " -f 1)
   sed -e 's@${NAMESPACE}@'"$NAMESPACE"'@g' -e 's@${SERVICE}@'"$SERVICE"'@g' \
     -e 's@${POLICY_GROUP}@'"$POLICY_GROUP"'@g' \
+    -e 's@${SERVICE_ACCOUNT_NAME}@'"$SERVICE_ACCOUNT_NAME"'@g' \
     -e 's@${SCHEDULER_SERVICE_ADDRESS}@'"$SCHEDULER_SERVICE_ADDRESS"'@g' \
+    -e 's@${ADMISSION_CONTROLLER_IMAGE_REGISTRY}@'"$ADMISSION_CONTROLLER_IMAGE_REGISTRY"'@g' \
+    -e 's@${ADMISSION_CONTROLLER_IMAGE_TAG}@'"$ADMISSION_CONTROLLER_IMAGE_TAG"'@g' \
+    -e 's@${ADMISSION_CONTROLLER_IMAGE_PULL_POLICY}@'"$ADMISSION_CONTROLLER_IMAGE_PULL_POLICY"'@g' \
+    -e 's@${ENABLE_CONFIG_HOT_REFRESH}@'"$ENABLE_CONFIG_HOT_REFRESH"'@g' \
     <"${basedir}/templates/server.yaml.template" > server.yaml
+
+if [ -n "$ADMISSION_CONTROLLER_IMAGE_PULL_SECRETS" ]; then
+  touch .server_yaml_tmp_file
+  secrets_array=`echo "${ADMISSION_CONTROLLER_IMAGE_PULL_SECRETS}" | cut -d']' -f 1 | cut -d'[' -f 2`
+  echo ${secrets_array} | awk -F" " '{ split($0, arr, " "); }END{ for ( i in arr ) { print arr[i] } }' | while read line ; do
+    echo "      - name: ${line}" >> .server_yaml_tmp_file
+  done
+  sed -i '/[\s]*imagePullSecrets:/r .server_yaml_tmp_file' server.yaml
+  rm -rf .server_yaml_tmp_file
+fi
+  # ImagePullSecrets is an array with format [secret1 secret2 ...]
+
   kubectl create -f server.yaml
 
   # register admissions
@@ -150,7 +184,6 @@ elif [ $# -eq 1 ] && [ $1 == "create" ]; then
   precheck
   KEY_DIR="$(mktemp -d)"
   create_resources ${KEY_DIR}
-  rm -rf "$keydir"
   exit $?
 else
   usage

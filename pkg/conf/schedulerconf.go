@@ -28,13 +28,14 @@ import (
 	"go.uber.org/zap/zapcore"
 	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/scheduler/algorithm/predicates"
+
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/constants"
 )
 
 // default configuration values, these can be override by CLI options
 const (
 	DefaultClusterID            = "my-kube-cluster"
 	DefaultClusterVersion       = "0.1"
-	DefaultSchedulerName        = "yunikorn"
 	DefaultPolicyGroup          = "queues"
 	DefaultLoggingLevel         = 0
 	DefaultLogEncoding          = "console"
@@ -46,30 +47,32 @@ const (
 	DefaultKubeBurst            = 1000
 )
 
+var once sync.Once
 var configuration *SchedulerConf
 
 type SchedulerConf struct {
-	ClusterID            string        `json:"clusterId"`
-	ClusterVersion       string        `json:"clusterVersion"`
-	SchedulerName        string        `json:"schedulerName"`
-	PolicyGroup          string        `json:"policyGroup"`
-	Interval             time.Duration `json:"schedulingIntervalSecond"`
-	KubeConfig           string        `json:"absoluteKubeConfigFilePath"`
-	LoggingLevel         int           `json:"loggingLevel"`
-	LogEncoding          string        `json:"logEncoding"`
-	LogFile              string        `json:"logFilePath"`
-	VolumeBindTimeout    time.Duration `json:"volumeBindTimeout"`
-	TestMode             bool          `json:"testMode"`
-	EventChannelCapacity int           `json:"eventChannelCapacity"`
-	DispatchTimeout      time.Duration `json:"dispatchTimeout"`
-	KubeQPS              int           `json:"kubeQPS"`
-	KubeBurst            int           `json:"kubeBurst"`
-	Predicates           string        `json:"predicates"`
-	OperatorPlugins      string        `json:"operatorPlugins"`
+	ClusterID              string        `json:"clusterId"`
+	ClusterVersion         string        `json:"clusterVersion"`
+	PolicyGroup            string        `json:"policyGroup"`
+	Interval               time.Duration `json:"schedulingIntervalSecond"`
+	KubeConfig             string        `json:"absoluteKubeConfigFilePath"`
+	LoggingLevel           int           `json:"loggingLevel"`
+	LogEncoding            string        `json:"logEncoding"`
+	LogFile                string        `json:"logFilePath"`
+	VolumeBindTimeout      time.Duration `json:"volumeBindTimeout"`
+	TestMode               bool          `json:"testMode"`
+	EventChannelCapacity   int           `json:"eventChannelCapacity"`
+	DispatchTimeout        time.Duration `json:"dispatchTimeout"`
+	KubeQPS                int           `json:"kubeQPS"`
+	KubeBurst              int           `json:"kubeBurst"`
+	Predicates             string        `json:"predicates"`
+	OperatorPlugins        string        `json:"operatorPlugins"`
+	EnableConfigHotRefresh bool          `json:"enableConfigHotRefresh"`
 	sync.RWMutex
 }
 
 func GetSchedulerConf() *SchedulerConf {
+	once.Do(initConfigs)
 	return configuration
 }
 
@@ -108,7 +111,7 @@ func (conf *SchedulerConf) IsOperatorPluginEnabled(name string) bool {
 	return false
 }
 
-func init() {
+func initConfigs() {
 	// scheduler options
 	kubeConfig := flag.String("kubeConfig", "",
 		"absolute path to the kubeconfig file")
@@ -118,8 +121,6 @@ func init() {
 		"cluster id")
 	clusterVersion := flag.String("clusterVersion", DefaultClusterVersion,
 		"cluster version")
-	schedulerName := flag.String("name", DefaultSchedulerName,
-		"name of the scheduler")
 	policyGroup := flag.String("policyGroup", DefaultPolicyGroup,
 		"policy group")
 	volumeBindTimeout := flag.Duration("volumeBindTimeout", DefaultVolumeBindTimeout,
@@ -135,8 +136,9 @@ func init() {
 	predicateList := flag.String("predicates", "",
 		fmt.Sprintf("comma-separated list of predicates, valid predicates are: %s, "+
 			"the program will exit if any invalid predicates exist.", predicates.Ordering()))
-	operatorPluginList := flag.String("operatorPlugins", "general",
-		"common-separated list of operator plugin names, currently, only \"spark-operator-service\" is supported.")
+	operatorPluginList := flag.String("operatorPlugins", "general,"+constants.AppManagerHandlerName,
+		"comma-separated list of operator plugin names, currently, only \"spark-operator-service\""+
+			"and"+constants.AppManagerHandlerName+"is supported.")
 
 	// logging options
 	logLevel := flag.Int("logLevel", DefaultLoggingLevel,
@@ -145,6 +147,9 @@ func init() {
 		"log encoding, json or console.")
 	logFile := flag.String("logFile", "",
 		"absolute log file path")
+	enableConfigHotRefresh := flag.Bool("enableConfigHotRefresh", false, "Flag for enabling "+
+		"configuration hot-refresh. If this value is set to true, the configuration updates in the configmap will be "+
+		"automatically reloaded without restarting the scheduler.")
 
 	flag.Parse()
 
@@ -159,21 +164,21 @@ func init() {
 	}
 
 	configuration = &SchedulerConf{
-		ClusterID:            *clusterID,
-		ClusterVersion:       *clusterVersion,
-		PolicyGroup:          *policyGroup,
-		SchedulerName:        *schedulerName,
-		Interval:             *schedulingInterval,
-		KubeConfig:           *kubeConfig,
-		LoggingLevel:         *logLevel,
-		LogEncoding:          *encode,
-		LogFile:              *logFile,
-		VolumeBindTimeout:    *volumeBindTimeout,
-		EventChannelCapacity: *eventChannelCapacity,
-		DispatchTimeout:      *dispatchTimeout,
-		KubeQPS:              *kubeQPS,
-		KubeBurst:            *kubeBurst,
-		Predicates:           *predicateList,
-		OperatorPlugins:      *operatorPluginList,
+		ClusterID:              *clusterID,
+		ClusterVersion:         *clusterVersion,
+		PolicyGroup:            *policyGroup,
+		Interval:               *schedulingInterval,
+		KubeConfig:             *kubeConfig,
+		LoggingLevel:           *logLevel,
+		LogEncoding:            *encode,
+		LogFile:                *logFile,
+		VolumeBindTimeout:      *volumeBindTimeout,
+		EventChannelCapacity:   *eventChannelCapacity,
+		DispatchTimeout:        *dispatchTimeout,
+		KubeQPS:                *kubeQPS,
+		KubeBurst:              *kubeBurst,
+		Predicates:             *predicateList,
+		OperatorPlugins:        *operatorPluginList,
+		EnableConfigHotRefresh: *enableConfigHotRefresh,
 	}
 }

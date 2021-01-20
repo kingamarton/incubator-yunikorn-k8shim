@@ -1,4 +1,4 @@
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: yunikorn-admission-controller
@@ -15,6 +15,9 @@ spec:
       labels:
         app: yunikorn
     spec:
+      serviceAccountName: ${SERVICE_ACCOUNT_NAME}
+      imagePullSecrets:
+      hostNetwork: true
       tolerations:
       - operator: "Exists"
       affinity:
@@ -29,10 +32,10 @@ spec:
               topologyKey: "kubernetes.io/hostname"
       containers:
         - name: yunikorn-admission-controller-webhook
-          image: yunikorn/yunikorn-scheduler-admission-controller:latest
-          imagePullPolicy: Always
+          image: ${ADMISSION_CONTROLLER_IMAGE_REGISTRY}:${ADMISSION_CONTROLLER_IMAGE_TAG}
+          imagePullPolicy: ${ADMISSION_CONTROLLER_IMAGE_PULL_POLICY}
           ports:
-          - containerPort: 8443
+          - containerPort: 9089
             name: webhook-api
           volumeMounts:
           - name: webhook-tls-certs
@@ -43,6 +46,9 @@ spec:
             value: ${POLICY_GROUP}
           - name: SCHEDULER_SERVICE_ADDRESS
             value: ${SCHEDULER_SERVICE_ADDRESS}
+          - name: ENABLE_CONFIG_HOT_REFRESH
+            value: '${ENABLE_CONFIG_HOT_REFRESH}'
+      dnsPolicy: ClusterFirstWithHostNet
       volumes:
       - name: webhook-tls-certs
         secret:

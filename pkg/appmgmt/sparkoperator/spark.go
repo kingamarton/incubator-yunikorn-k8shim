@@ -30,6 +30,7 @@ import (
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/appmgmt/interfaces"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/client"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common"
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/constants"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/utils"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/log"
 	"github.com/apache/incubator-yunikorn-scheduler-interface/lib/go/si"
@@ -93,14 +94,14 @@ func (os *Manager) Name() string {
 
 func (os *Manager) Start() error {
 	if os.crdInformerFactory != nil {
-		log.Logger.Info("starting", zap.String("Name", os.Name()))
+		log.Logger().Info("starting", zap.String("Name", os.Name()))
 		go os.crdInformerFactory.Start(os.stopCh)
 	}
 	return nil
 }
 
 func (os *Manager) Stop() {
-	log.Logger.Info("stopping", zap.String("Name", os.Name()))
+	log.Logger().Info("stopping", zap.String("Name", os.Name()))
 	os.stopCh <- struct{}{}
 }
 
@@ -124,10 +125,13 @@ func (os *Manager) getAppMetadata(sparkApp *v1beta2.SparkApplication) interfaces
 	}
 
 	// set queue name if app labels it
-	queueName := common.ApplicationDefaultQueue
-	if an, ok := sparkApp.Labels[common.LabelQueueName]; ok {
+	queueName := constants.ApplicationDefaultQueue
+	if an, ok := sparkApp.Labels[constants.LabelQueueName]; ok {
 		queueName = an
 	}
+
+	// retrieve the namespace info from the CRD
+	tags[constants.AppTagNamespace] = sparkApp.Namespace
 
 	return interfaces.ApplicationMetadata{
 		ApplicationID: sparkApp.Name,
@@ -155,14 +159,14 @@ func (os *Manager) ListApplications() (map[string]interfaces.ApplicationMetadata
 func (os *Manager) GetExistingAllocation(pod *v1.Pod) *si.Allocation {
 	if meta, valid := os.getTaskMetadata(pod); valid {
 		return &si.Allocation{
-			AllocationKey:    pod.Name,
+			AllocationKey:    string(pod.UID),
 			AllocationTags:   nil,
 			UUID:             string(pod.UID),
 			ResourcePerAlloc: common.GetPodResource(pod),
 			QueueName:        utils.GetQueueNameFromPod(pod),
 			NodeID:           pod.Spec.NodeName,
 			ApplicationID:    meta.ApplicationID,
-			PartitionName:    common.DefaultPartition,
+			PartitionName:    constants.DefaultPartition,
 		}
 	}
 	return nil
@@ -171,7 +175,7 @@ func (os *Manager) GetExistingAllocation(pod *v1.Pod) *si.Allocation {
 // callbacks for SparkApplication CRD
 func (os *Manager) addApplication(obj interface{}) {
 	app := obj.(*v1beta2.SparkApplication)
-	log.Logger.Info("spark app added", zap.Any("SparkApplication", app))
+	log.Logger().Info("spark app added", zap.Any("SparkApplication", app))
 	os.amProtocol.AddApplication(&interfaces.AddApplicationRequest{
 		Metadata: os.getAppMetadata(app),
 		Recovery: false,
@@ -181,14 +185,14 @@ func (os *Manager) addApplication(obj interface{}) {
 func (os *Manager) updateApplication(old, new interface{}) {
 	appOld := old.(*v1beta2.SparkApplication)
 	appNew := new.(*v1beta2.SparkApplication)
-	log.Logger.Debug("spark app updated",
+	log.Logger().Debug("spark app updated",
 		zap.Any("old", appOld),
 		zap.Any("old", appNew))
 }
 
 func (os *Manager) deleteApplication(obj interface{}) {
 	app := obj.(*v1beta2.SparkApplication)
-	log.Logger.Info("spark app deleted", zap.Any("SparkApplication", app))
+	log.Logger().Info("spark app deleted", zap.Any("SparkApplication", app))
 	os.amProtocol.NotifyApplicationComplete(os.getAppMetadata(app).ApplicationID)
 }
 

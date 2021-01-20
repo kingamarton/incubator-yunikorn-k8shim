@@ -100,7 +100,7 @@ func (nc *schedulerNodes) addAndReportNode(node *v1.Node, reportNode bool) {
 
 	// add node to nodes map
 	if _, ok := nc.nodesMap[node.Name]; !ok {
-		log.Logger.Info("adding node to context",
+		log.Logger().Info("adding node to context",
 			zap.String("nodeName", node.Name),
 			zap.Bool("schedulable", !node.Spec.Unschedulable))
 		newNode := newSchedulerNode(node.Name, string(node.UID),
@@ -124,7 +124,7 @@ func (nc *schedulerNodes) addAndReportNode(node *v1.Node, reportNode bool) {
 }
 
 func (nc *schedulerNodes) drainNode(node *v1.Node) {
-	log.Logger.Info("draining node", zap.String("name", node.Name))
+	log.Logger().Info("draining node", zap.String("name", node.Name))
 	if node, ok := nc.nodesMap[node.Name]; ok {
 		if node.getNodeState() == events.States().Node.Healthy {
 			dispatcher.Dispatch(CachedSchedulerNodeEvent{
@@ -136,7 +136,7 @@ func (nc *schedulerNodes) drainNode(node *v1.Node) {
 }
 
 func (nc *schedulerNodes) restoreNode(node *v1.Node) {
-	log.Logger.Info("restoring node", zap.String("name", node.Name))
+	log.Logger().Info("restoring node", zap.String("name", node.Name))
 	if node, ok := nc.nodesMap[node.Name]; ok {
 		if node.getNodeState() == events.States().Node.Draining {
 			dispatcher.Dispatch(CachedSchedulerNodeEvent{
@@ -168,16 +168,24 @@ func (nc *schedulerNodes) updateNodeOccupiedResources(name string, resource *si.
 
 		node := common.NewNode(schedulerNode.name, schedulerNode.uid, schedulerNode.capacity, schedulerNode.occupied)
 		request := common.CreateUpdateRequestForUpdatedNode(node)
-		log.Logger.Info("report occupied resources updates",
+		log.Logger().Info("report occupied resources updates",
 			zap.String("node", schedulerNode.name),
 			zap.Any("request", request))
 		if err := nc.proxy.Update(&request); err != nil {
-			log.Logger.Info("hitting error while handling UpdateNode", zap.Error(err))
+			log.Logger().Info("hitting error while handling UpdateNode", zap.Error(err))
 		}
 	}
 }
 
 func (nc *schedulerNodes) updateNode(oldNode, newNode *v1.Node) {
+	// before updating a node, check if it exists in the cache or not
+	// if we receive a update node event but the node doesn't exist,
+	// we need to add it instead of updating it.
+	if cachedNode := nc.getNode(newNode.Name); cachedNode == nil {
+		nc.addNode(newNode)
+		return
+	}
+
 	nc.lock.Lock()
 	defer nc.lock.Unlock()
 
@@ -195,9 +203,9 @@ func (nc *schedulerNodes) updateNode(oldNode, newNode *v1.Node) {
 
 	node := common.CreateFrom(newNode)
 	request := common.CreateUpdateRequestForUpdatedNode(node)
-	log.Logger.Info("report updated nodes to scheduler", zap.Any("request", request))
+	log.Logger().Info("report updated nodes to scheduler", zap.Any("request", request))
 	if err := nc.proxy.Update(&request); err != nil {
-		log.Logger.Info("hitting error while handling UpdateNode", zap.Error(err))
+		log.Logger().Info("hitting error while handling UpdateNode", zap.Error(err))
 	}
 }
 
@@ -205,11 +213,13 @@ func (nc *schedulerNodes) deleteNode(node *v1.Node) {
 	nc.lock.Lock()
 	defer nc.lock.Unlock()
 
+	delete(nc.nodesMap, node.Name)
+
 	n := common.CreateFrom(node)
 	request := common.CreateUpdateRequestForDeleteNode(n)
-	log.Logger.Info("report updated nodes to scheduler", zap.Any("request", request.String()))
+	log.Logger().Info("report updated nodes to scheduler", zap.Any("request", request.String()))
 	if err := nc.proxy.Update(&request); err != nil {
-		log.Logger.Info("hitting error while handling UpdateNode", zap.Error(err))
+		log.Logger().Error("hitting error while handling UpdateNode", zap.Error(err))
 	}
 }
 
@@ -219,7 +229,7 @@ func (nc *schedulerNodes) schedulerNodeEventHandler() func(obj interface{}) {
 			if node := nc.getNode(event.GetNodeID()); node != nil {
 				if node.canHandle(event) {
 					if err := node.handle(event); err != nil {
-						log.Logger.Error("failed to handle scheduler node event",
+						log.Logger().Error("failed to handle scheduler node event",
 							zap.String("event", string(event.GetEvent())),
 							zap.Error(err))
 					}

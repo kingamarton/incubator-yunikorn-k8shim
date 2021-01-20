@@ -67,7 +67,7 @@ func (cache *SchedulerCache) GetNodesInfoMap() map[string]*schedulernode.NodeInf
 
 func (cache *SchedulerCache) assignArgs(args *factory.PluginFactoryArgs) {
 	// nodes cache implemented PodLister and NodeInfo interface
-	log.Logger.Debug("Initialising PluginFactoryArgs using SchedulerCache")
+	log.Logger().Debug("Initialising PluginFactoryArgs using SchedulerCache")
 	args.PodLister = cache
 	args.NodeInfo = cache
 	args.VolumeBinder = cache.clients.VolumeBinder
@@ -93,10 +93,15 @@ func (cache *SchedulerCache) AddNode(node *v1.Node) {
 	_, ok := cache.nodesMap[node.Name]
 	if !ok {
 		n := schedulernode.NewNodeInfo()
-		// API call always returns nil, never an error
-		//nolint:errcheck
-		_ = n.SetNode(node)
 		cache.nodesMap[node.Name] = n
+	}
+
+	// make sure the node is always linked to the cached node object
+	// Currently, SetNode API call always returns nil, never an error
+	if err := cache.nodesMap[node.Name].SetNode(node); err != nil {
+		// currently, this may never reached because SetNode always return nil
+		// keep the check around to prevent the API changes to provide an error in some cases
+		log.Logger().Error("failed to store v1.Node in cache", zap.Error(err))
 	}
 }
 
@@ -104,15 +109,15 @@ func (cache *SchedulerCache) UpdateNode(oldNode, newNode *v1.Node) error {
 	cache.lock.Lock()
 	defer cache.lock.Unlock()
 
-	n, ok := cache.nodesMap[oldNode.Name]
-	if ok {
-		// API calls always returns nil, never an error
-		//nolint:errcheck
-		_ = n.RemoveNode(oldNode)
-		//nolint:errcheck
-		_ = n.SetNode(newNode)
+	n, ok := cache.nodesMap[newNode.Name]
+	if !ok {
+		log.Logger().Warn("updated node info not found, adding it to the cache",
+			zap.String("nodeName", newNode.Name))
+		n = schedulernode.NewNodeInfo()
+		cache.nodesMap[newNode.Name] = n
 	}
-	return nil
+
+	return n.SetNode(newNode)
 }
 
 func (cache *SchedulerCache) RemoveNode(node *v1.Node) error {
@@ -161,14 +166,14 @@ func (cache *SchedulerCache) AddPod(pod *v1.Pod) error {
 	case ok && cache.isAssumedPod(key):
 		if currState.Spec.NodeName != pod.Spec.NodeName {
 			// The pod was added to a different node than it was assumed to.
-			log.Logger.Warn("inconsistent pod location",
+			log.Logger().Warn("inconsistent pod location",
 				zap.String("assumedLocation", pod.Spec.NodeName),
 				zap.String("actualLocation", currState.Spec.NodeName))
 
 			// Clean this up.
 			err = cache.removePod(currState)
 			if err != nil {
-				log.Logger.Debug("node not in cache",
+				log.Logger().Debug("node not in cache",
 					zap.Error(err))
 			}
 			cache.addPod(pod)
@@ -180,7 +185,7 @@ func (cache *SchedulerCache) AddPod(pod *v1.Pod) error {
 		cache.addPod(pod)
 		cache.podsMap[key] = pod
 	default:
-		log.Logger.Debug("pod was already in added state", zap.String("pod", key))
+		log.Logger().Debug("pod was already in added state", zap.String("pod", key))
 	}
 	return nil
 }
@@ -200,8 +205,8 @@ func (cache *SchedulerCache) UpdatePod(oldPod, newPod *v1.Pod) error {
 	// before Update event, in which case the state would change from Assumed to Added.
 	case ok && !cache.isAssumedPod(key):
 		if currState.Spec.NodeName != newPod.Spec.NodeName {
-			log.Logger.Error("pod updated on a different node than previously added to", zap.String("pod", key))
-			log.Logger.Error("scheduler cache is corrupted and can badly affect scheduling decisions")
+			log.Logger().Error("pod updated on a different node than previously added to", zap.String("pod", key))
+			log.Logger().Error("scheduler cache is corrupted and can badly affect scheduling decisions")
 		}
 		if err = cache.updatePod(oldPod, newPod); err != nil {
 			return err

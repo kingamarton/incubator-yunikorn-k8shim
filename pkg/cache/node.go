@@ -26,6 +26,7 @@ import (
 
 	"github.com/apache/incubator-yunikorn-core/pkg/api"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common"
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/constants"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/events"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/conf"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/dispatcher"
@@ -96,13 +97,14 @@ func (n *SchedulerNode) initFSM() {
 			string(events.DrainNode):   n.handleDrainNode,
 			string(events.RestoreNode): n.handleRestoreNode,
 			string(states.Accepted):    n.postNodeAccepted,
+			events.EnterState:          n.enterState,
 		})
 }
 
 func (n *SchedulerNode) addExistingAllocation(allocation *si.Allocation) {
 	n.lock.Lock()
 	defer n.lock.Unlock()
-	log.Logger.Info("add existing allocation",
+	log.Logger().Info("add existing allocation",
 		zap.Any("allocation", allocation))
 	n.existingAllocations = append(n.existingAllocations, allocation)
 }
@@ -110,7 +112,7 @@ func (n *SchedulerNode) addExistingAllocation(allocation *si.Allocation) {
 func (n *SchedulerNode) setOccupiedResource(resource *si.Resource) {
 	n.lock.Lock()
 	defer n.lock.Unlock()
-	log.Logger.Info("set node occupied resource",
+	log.Logger().Info("set node occupied resource",
 		zap.String("occupied", resource.String()))
 	n.occupied = resource
 }
@@ -139,7 +141,7 @@ func (n *SchedulerNode) postNodeAccepted(event *fsm.Event) {
 }
 
 func (n *SchedulerNode) handleNodeRecovery(event *fsm.Event) {
-	log.Logger.Info("node recovering",
+	log.Logger().Info("node recovering",
 		zap.String("nodeID", n.name),
 		zap.Bool("schedulable", n.schedulable))
 
@@ -152,8 +154,8 @@ func (n *SchedulerNode) handleNodeRecovery(event *fsm.Event) {
 				SchedulableResource: n.capacity,
 				OccupiedResource:    n.occupied,
 				Attributes: map[string]string{
-					common.DefaultNodeAttributeHostNameKey: n.name,
-					common.DefaultNodeAttributeRackNameKey: common.DefaultRackName,
+					constants.DefaultNodeAttributeHostNameKey: n.name,
+					constants.DefaultNodeAttributeRackNameKey: constants.DefaultRackName,
 				},
 				ExistingAllocations: n.existingAllocations,
 			},
@@ -163,13 +165,13 @@ func (n *SchedulerNode) handleNodeRecovery(event *fsm.Event) {
 
 	// send request to scheduler-core
 	if err := n.schedulerAPI.Update(request); err != nil {
-		log.Logger.Error("failed to send request",
+		log.Logger().Error("failed to send request",
 			zap.Any("request", request))
 	}
 }
 
 func (n *SchedulerNode) handleDrainNode(event *fsm.Event) {
-	log.Logger.Info("node enters draining mode",
+	log.Logger().Info("node enters draining mode",
 		zap.String("nodeID", n.name))
 
 	request := &si.UpdateRequest{
@@ -180,8 +182,8 @@ func (n *SchedulerNode) handleDrainNode(event *fsm.Event) {
 				NodeID: n.name,
 				Action: si.UpdateNodeInfo_DRAIN_NODE,
 				Attributes: map[string]string{
-					common.DefaultNodeAttributeHostNameKey: n.name,
-					common.DefaultNodeAttributeRackNameKey: common.DefaultRackName,
+					constants.DefaultNodeAttributeHostNameKey: n.name,
+					constants.DefaultNodeAttributeRackNameKey: constants.DefaultRackName,
 				},
 			},
 		},
@@ -190,13 +192,13 @@ func (n *SchedulerNode) handleDrainNode(event *fsm.Event) {
 
 	// send request to scheduler-core
 	if err := n.schedulerAPI.Update(request); err != nil {
-		log.Logger.Error("failed to send request",
+		log.Logger().Error("failed to send request",
 			zap.Any("request", request))
 	}
 }
 
 func (n *SchedulerNode) handleRestoreNode(event *fsm.Event) {
-	log.Logger.Info("restore node from draining mode",
+	log.Logger().Info("restore node from draining mode",
 		zap.String("nodeID", n.name))
 
 	request := &si.UpdateRequest{
@@ -207,8 +209,8 @@ func (n *SchedulerNode) handleRestoreNode(event *fsm.Event) {
 				NodeID: n.name,
 				Action: si.UpdateNodeInfo_DRAIN_TO_SCHEDULABLE,
 				Attributes: map[string]string{
-					common.DefaultNodeAttributeHostNameKey: n.name,
-					common.DefaultNodeAttributeRackNameKey: common.DefaultRackName,
+					constants.DefaultNodeAttributeHostNameKey: n.name,
+					constants.DefaultNodeAttributeRackNameKey: constants.DefaultRackName,
 				},
 			},
 		},
@@ -217,7 +219,7 @@ func (n *SchedulerNode) handleRestoreNode(event *fsm.Event) {
 
 	// send request to scheduler-core
 	if err := n.schedulerAPI.Update(request); err != nil {
-		log.Logger.Error("failed to send request",
+		log.Logger().Error("failed to send request",
 			zap.Any("request", request))
 	}
 }
@@ -225,18 +227,11 @@ func (n *SchedulerNode) handleRestoreNode(event *fsm.Event) {
 func (n *SchedulerNode) handle(ev events.SchedulerNodeEvent) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
-	log.Logger.Debug("scheduler node state transition",
-		zap.String("nodeID", ev.GetNodeID()),
-		zap.String("preState", n.fsm.Current()),
-		zap.String("pendingEvent", string(ev.GetEvent())))
 	err := n.fsm.Event(string(ev.GetEvent()), ev.GetArgs()...)
 	// handle the same state transition not nil error (limit of fsm).
 	if err != nil && err.Error() != "no transition" {
 		return err
 	}
-	log.Logger.Debug("scheduler node state transition",
-		zap.String("nodeID", ev.GetNodeID()),
-		zap.String("postState", n.fsm.Current()))
 	return nil
 }
 
@@ -244,4 +239,12 @@ func (n *SchedulerNode) canHandle(ev events.SchedulerNodeEvent) bool {
 	n.lock.RLock()
 	defer n.lock.RUnlock()
 	return n.fsm.Can(string(ev.GetEvent()))
+}
+
+func (n *SchedulerNode) enterState(event *fsm.Event) {
+	log.Logger().Debug("shim node state transition",
+		zap.String("node", n.name),
+		zap.String("source", event.Src),
+		zap.String("destination", event.Dst),
+		zap.String("event", event.Event))
 }

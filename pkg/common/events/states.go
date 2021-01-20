@@ -44,6 +44,7 @@ type ApplicationStates struct {
 	Recovering string
 	Submitted  string
 	Accepted   string
+	Reserving  string
 	Running    string
 	Rejected   string
 	Completed  string
@@ -73,6 +74,7 @@ type TaskStates struct {
 	Failed     string
 	Completed  string
 	Any        []string // Any refers to all possible states
+	Terminated []string // Rejected, Killed, Failed, Completed
 }
 
 func States() *AllStates {
@@ -83,6 +85,7 @@ func States() *AllStates {
 				Recovering: "Recovering",
 				Submitted:  "Submitted",
 				Accepted:   "Accepted",
+				Reserving:  "Reserving",
 				Running:    "Running",
 				Rejected:   "Rejected",
 				Completed:  "Completed",
@@ -106,6 +109,10 @@ func States() *AllStates {
 					"TaskAllocated", "Rejected",
 					"Bound", "Killing", "Killed",
 					"Failed", "Completed",
+				},
+				Terminated: []string{
+					"Rejected", "Killed", "Failed",
+					"Completed",
 				},
 			},
 			Scheduler: &SchedulerStates{

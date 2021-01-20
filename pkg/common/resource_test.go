@@ -18,6 +18,7 @@
 package common
 
 import (
+	"fmt"
 	"testing"
 
 	"gotest.tools/assert"
@@ -25,34 +26,35 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	apis "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/constants"
 	"github.com/apache/incubator-yunikorn-scheduler-interface/lib/go/si"
 )
 
 func TestAdd(t *testing.T) {
 	r1 := NewResourceBuilder().
-		AddResource(Memory, 1).
-		AddResource(CPU, 1).
+		AddResource(constants.Memory, 1).
+		AddResource(constants.CPU, 1).
 		Build()
 	r2 := NewResourceBuilder().
-		AddResource(Memory, 2).
-		AddResource(CPU, 2).
+		AddResource(constants.Memory, 2).
+		AddResource(constants.CPU, 2).
 		Build()
 	r := Add(r1, r2)
 	assert.Equal(t, len(r.Resources), 2)
-	assert.Equal(t, r.Resources[Memory].Value, int64(3))
-	assert.Equal(t, r.Resources[CPU].Value, int64(3))
+	assert.Equal(t, r.Resources[constants.Memory].Value, int64(3))
+	assert.Equal(t, r.Resources[constants.CPU].Value, int64(3))
 
 	r1 = NewResourceBuilder().
-		AddResource(Memory, 1).
+		AddResource(constants.Memory, 1).
 		Build()
 	r2 = NewResourceBuilder().
-		AddResource(Memory, 2).
-		AddResource(CPU, 2).
+		AddResource(constants.Memory, 2).
+		AddResource(constants.CPU, 2).
 		Build()
 	r = Add(r1, r2)
 	assert.Equal(t, len(r.Resources), 2)
-	assert.Equal(t, r.Resources[Memory].Value, int64(3))
-	assert.Equal(t, r.Resources[CPU].Value, int64(2))
+	assert.Equal(t, r.Resources[constants.Memory].Value, int64(3))
+	assert.Equal(t, r.Resources[constants.CPU].Value, int64(2))
 
 	r1 = nil
 	r2 = nil
@@ -60,65 +62,65 @@ func TestAdd(t *testing.T) {
 	assert.Equal(t, len(r.Resources), 0)
 
 	r1 = NewResourceBuilder().
-		AddResource(Memory, 1).
+		AddResource(constants.Memory, 1).
 		Build()
 	r2 = nil
 	r = Add(r1, r2)
 	assert.Equal(t, len(r.Resources), 1)
-	assert.Equal(t, r.Resources[Memory].Value, int64(1))
+	assert.Equal(t, r.Resources[constants.Memory].Value, int64(1))
 
 	r1 = nil
 	r2 = NewResourceBuilder().
-		AddResource(Memory, 1).
+		AddResource(constants.Memory, 1).
 		Build()
 	r = Add(r1, r2)
 	assert.Equal(t, len(r.Resources), 1)
-	assert.Equal(t, r.Resources[Memory].Value, int64(1))
+	assert.Equal(t, r.Resources[constants.Memory].Value, int64(1))
 
 	r1 = NewResourceBuilder().
-		AddResource(Memory, 1024).
-		AddResource(CPU, 20).
+		AddResource(constants.Memory, 1024).
+		AddResource(constants.CPU, 20).
 		AddResource("nvidia.com/gpu", 2).
 		Build()
 	r2 = NewResourceBuilder().
-		AddResource(Memory, 2048).
-		AddResource(CPU, 30).
+		AddResource(constants.Memory, 2048).
+		AddResource(constants.CPU, 30).
 		AddResource("nvidia.com/gpu", 3).
 		Build()
 	r = Add(r1, r2)
 	assert.Equal(t, len(r.Resources), 3)
-	assert.Equal(t, r.Resources[Memory].Value, int64(3072))
-	assert.Equal(t, r.Resources[CPU].Value, int64(50))
+	assert.Equal(t, r.Resources[constants.Memory].Value, int64(3072))
+	assert.Equal(t, r.Resources[constants.CPU].Value, int64(50))
 	assert.Equal(t, r.Resources["nvidia.com/gpu"].Value, int64(5))
 }
 
 func TestEquals(t *testing.T) {
 	r1 := NewResourceBuilder().
-		AddResource(Memory, 1).
-		AddResource(CPU, 1).
+		AddResource(constants.Memory, 1).
+		AddResource(constants.CPU, 1).
 		Build()
 	r2 := NewResourceBuilder().
-		AddResource(Memory, 1).
-		AddResource(CPU, 1).
+		AddResource(constants.Memory, 1).
+		AddResource(constants.CPU, 1).
 		Build()
 	assert.Equal(t, Equals(r1, r2), true)
 
 	r1 = NewResourceBuilder().
-		AddResource(Memory, 1).
-		AddResource(CPU, 1).
+		AddResource(constants.Memory, 1).
+		AddResource(constants.CPU, 1).
 		Build()
 	r2 = NewResourceBuilder().
-		AddResource(Memory, 2).
-		AddResource(CPU, 1).
+		AddResource(constants.Memory, 2).
+		AddResource(constants.CPU, 1).
 		Build()
 	assert.Equal(t, Equals(r1, r2), false)
 
 	r1 = NewResourceBuilder().
-		AddResource(Memory, 1).
+		AddResource(constants.Memory, 1).
 		Build()
 	r2 = NewResourceBuilder().
-		AddResource(Memory, 1).
-		AddResource(CPU, 1).
+		AddResource(constants.Memory, 1).
+		AddResource(constants.CPU, 1).
 		Build()
 	assert.Equal(t, Equals(r1, r2), false)
 
@@ -128,14 +130,14 @@ func TestEquals(t *testing.T) {
 
 	r1 = nil
 	r2 = NewResourceBuilder().
-		AddResource(Memory, 1).
-		AddResource(CPU, 1).
+		AddResource(constants.Memory, 1).
+		AddResource(constants.CPU, 1).
 		Build()
 	assert.Equal(t, Equals(r1, r2), false)
 
 	r1 = NewResourceBuilder().
-		AddResource(Memory, 1).
-		AddResource(CPU, 1).
+		AddResource(constants.Memory, 1).
+		AddResource(constants.CPU, 1).
 		Build()
 	r2 = nil
 	assert.Equal(t, Equals(r1, r2), false)
@@ -185,8 +187,8 @@ func TestParsePodResource(t *testing.T) {
 
 	// verify we get aggregated resource from containers
 	res := GetPodResource(pod)
-	assert.Equal(t, res.Resources[Memory].GetValue(), int64(1524))
-	assert.Equal(t, res.Resources[CPU].GetValue(), int64(3000))
+	assert.Equal(t, res.Resources[constants.Memory].GetValue(), int64(1524))
+	assert.Equal(t, res.Resources[constants.CPU].GetValue(), int64(3000))
 	assert.Equal(t, res.Resources["nvidia.com/gpu"].GetValue(), int64(5))
 }
 
@@ -218,14 +220,14 @@ func TestBestEffortPod(t *testing.T) {
 	// best effort pod all resources are nil or zero
 	res := GetPodResource(pod)
 	assert.Equal(t, len(res.Resources), 1)
-	assert.Equal(t, res.Resources[Memory].GetValue(), int64(1))
+	assert.Equal(t, res.Resources[constants.Memory].GetValue(), int64(1))
 
 	// Add a resource to existing container (other than mem)
 	resources[v1.ResourceCPU] = resource.MustParse("1")
 
 	res = GetPodResource(pod)
 	assert.Equal(t, len(res.Resources), 1)
-	assert.Equal(t, res.Resources[CPU].GetValue(), int64(1000))
+	assert.Equal(t, res.Resources[constants.CPU].GetValue(), int64(1000))
 
 	// reset the cpu request to zero and add memory
 	resources[v1.ResourceMemory] = resource.MustParse("0")
@@ -233,7 +235,7 @@ func TestBestEffortPod(t *testing.T) {
 
 	res = GetPodResource(pod)
 	assert.Equal(t, len(res.Resources), 1)
-	assert.Equal(t, res.Resources[Memory].GetValue(), int64(1))
+	assert.Equal(t, res.Resources[constants.Memory].GetValue(), int64(1))
 }
 
 func TestNodeResource(t *testing.T) {
@@ -243,54 +245,30 @@ func TestNodeResource(t *testing.T) {
 		Allocatable: nodeCapacity,
 	})
 
-	assert.Equal(t, result.Resources[CPU].GetValue(), int64(14500))
-}
-
-func TestCreateReleaseAllocationRequest(t *testing.T) {
-	request := CreateReleaseAllocationRequestForTask("app01", "alloc01", "default")
-	assert.Assert(t, request.Releases != nil)
-	assert.Assert(t, request.Releases.AllocationsToRelease != nil)
-	assert.Assert(t, request.Releases.AllocationAsksToRelease == nil)
-	assert.Equal(t, len(request.Releases.AllocationsToRelease), 1)
-	assert.Equal(t, len(request.Releases.AllocationAsksToRelease), 0)
-	assert.Equal(t, request.Releases.AllocationsToRelease[0].ApplicationID, "app01")
-	assert.Equal(t, request.Releases.AllocationsToRelease[0].UUID, "alloc01")
-	assert.Equal(t, request.Releases.AllocationsToRelease[0].PartitionName, "default")
-}
-
-func TestCreateReleaseAskRequestForTask(t *testing.T) {
-	request := CreateReleaseAskRequestForTask("app01", "task01", "default")
-	assert.Assert(t, request.Releases != nil)
-	assert.Assert(t, request.Releases.AllocationsToRelease == nil)
-	assert.Assert(t, request.Releases.AllocationAsksToRelease != nil)
-	assert.Equal(t, len(request.Releases.AllocationsToRelease), 0)
-	assert.Equal(t, len(request.Releases.AllocationAsksToRelease), 1)
-	assert.Equal(t, request.Releases.AllocationAsksToRelease[0].ApplicationID, "app01")
-	assert.Equal(t, request.Releases.AllocationAsksToRelease[0].Allocationkey, "task01")
-	assert.Equal(t, request.Releases.AllocationAsksToRelease[0].PartitionName, "default")
+	assert.Equal(t, result.Resources[constants.CPU].GetValue(), int64(14500))
 }
 
 func TestIsZero(t *testing.T) {
 	r := NewResourceBuilder().
-		AddResource(Memory, 1).
-		AddResource(CPU, 1).
+		AddResource(constants.Memory, 1).
+		AddResource(constants.CPU, 1).
 		Build()
 	assert.Equal(t, IsZero(r), false)
 
 	r = NewResourceBuilder().
-		AddResource(CPU, 0).
+		AddResource(constants.CPU, 0).
 		Build()
 	assert.Equal(t, IsZero(r), true)
 
 	r = NewResourceBuilder().
-		AddResource(Memory, 0).
-		AddResource(CPU, 0).
+		AddResource(constants.Memory, 0).
+		AddResource(constants.CPU, 0).
 		Build()
 	assert.Equal(t, IsZero(r), true)
 
 	r = NewResourceBuilder().
-		AddResource(Memory, 0).
-		AddResource(CPU, 1).
+		AddResource(constants.Memory, 0).
+		AddResource(constants.CPU, 1).
 		Build()
 	assert.Equal(t, IsZero(r), false)
 
@@ -348,5 +326,56 @@ func TestSub(t *testing.T) {
 
 	if !Equals(res3, expected) {
 		t.Errorf("sub failed expected %v, actual %v", expected, res3.Resources)
+	}
+}
+
+func TestParseResourceString(t *testing.T) {
+	testCases := []struct {
+		cpu          string
+		mem          string
+		cpuExist     bool
+		memoryExist  bool
+		expectCPU    int64
+		expectMemory int64
+	}{
+		// empty values
+		{"", "", false, false, 0, 0},
+		// cpu values
+		{"1", "", true, false, 1000, 0},
+		{"0.5", "", true, false, 500, 0},
+		{"0.33", "", true, false, 330, 0},
+		{"1000", "", true, false, 1000000, 0},
+		{"-10", "", true, false, -10000, 0},
+		{"100m", "", true, false, 100, 0},
+		// memory values
+		{"", "65536", false, true, 0, 1},
+		{"", "129M", false, true, 0, 129},
+		{"", "123Mi", false, true, 0, 129},
+		{"", "128974848", false, true, 0, 129},
+		{"", "1G", false, true, 0, 1000},
+		{"", "1Gi", false, true, 0, 1074},
+		{"", "1T", false, true, 0, 1000000},
+		{"", "1P", false, true, 0, 1000000000},
+		{"", "1E", false, true, 0, 1000000000000},
+		// cpu and memory
+		{"0.5", "64M", true, true, 500, 64},
+		// parsing error on cpu
+		{"xyz", "64M", false, false, 0, 0},
+		// parsing error on memory
+		{"100m", "64MiB", false, false, 0, 0},
+		// parsing failed for both cpu and memory
+		{"xyz", "64MiB", false, false, 0, 0},
+	}
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("cpu: %s, memory: %s", tc.cpu, tc.mem), func(t *testing.T) {
+			siResource := ParseResource(tc.cpu, tc.mem)
+			cpuRes, hasCPU := siResource.GetResources()[constants.CPU]
+			assert.Equal(t, hasCPU, tc.cpuExist)
+			assert.Equal(t, cpuRes.GetValue(), tc.expectCPU)
+			memRes, hasMem := siResource.GetResources()[constants.Memory]
+			assert.Equal(t, hasMem, tc.memoryExist)
+			assert.Equal(t, memRes.GetValue(), tc.expectMemory)
+		})
 	}
 }

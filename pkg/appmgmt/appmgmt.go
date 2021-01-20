@@ -25,7 +25,9 @@ import (
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/appmgmt/interfaces"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/appmgmt/sparkoperator"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/client"
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/constants"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/conf"
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/controller/application"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/log"
 )
 
@@ -51,7 +53,9 @@ func NewAMService(amProtocol interfaces.ApplicationManagementProtocol,
 			// for general apps
 			general.NewManager(amProtocol, apiProvider),
 			// for spark operator - SparkApplication
-			sparkoperator.NewManager(amProtocol, apiProvider))
+			sparkoperator.NewManager(amProtocol, apiProvider),
+			// for application crds
+			application.NewAppManager(amProtocol, apiProvider))
 	}
 
 	return appManager
@@ -61,14 +65,23 @@ func (svc *AppManagementService) GetAllManagers() []interfaces.AppManager {
 	return svc.managers
 }
 
+func (svc *AppManagementService) GetManagerByName(name string) interfaces.AppManager {
+	for _, mgr := range svc.managers {
+		if mgr.Name() == name {
+			return mgr
+		}
+	}
+	return nil
+}
+
 func (svc *AppManagementService) register(managers ...interfaces.AppManager) {
 	for _, mgr := range managers {
 		if conf.GetSchedulerConf().IsOperatorPluginEnabled(mgr.Name()) {
-			log.Logger.Info("registering app management service",
+			log.Logger().Info("registering app management service",
 				zap.String("serviceName", mgr.Name()))
 			svc.managers = append(svc.managers, mgr)
 		} else {
-			log.Logger.Info("skip registering app management service",
+			log.Logger().Info("skip registering app management service",
 				zap.String("serviceName", mgr.Name()))
 		}
 	}
@@ -78,22 +91,22 @@ func (svc *AppManagementService) Start() error {
 	for _, optService := range svc.managers {
 		// init service before starting
 		if err := optService.ServiceInit(); err != nil {
-			log.Logger.Error("service init fails",
+			log.Logger().Error("service init fails",
 				zap.String("serviceName", optService.Name()),
 				zap.Error(err))
 			return err
 		}
 
-		log.Logger.Info("starting app management service",
+		log.Logger().Info("starting app management service",
 			zap.String("serviceName", optService.Name()))
 		if err := optService.Start(); err != nil {
-			log.Logger.Error("failed to start management service",
+			log.Logger().Error("failed to start management service",
 				zap.String("serviceName", optService.Name()),
 				zap.Error(err))
 			return err
 		}
 
-		log.Logger.Info("app management service started",
+		log.Logger().Info("app management service started",
 			zap.String("serviceName", optService.Name()))
 	}
 
@@ -101,8 +114,22 @@ func (svc *AppManagementService) Start() error {
 }
 
 func (svc *AppManagementService) Stop() {
-	log.Logger.Info("shutting down app management services")
+	log.Logger().Info("shutting down app management services")
 	for _, optService := range svc.managers {
 		optService.Stop()
+	}
+}
+
+func (svc *AppManagementService) ApplicationStateUpdateEventHandler() func(obj interface{}) {
+	// when there is a app state update event received
+	// call the corresponding appManager to handle it, right now, only need to call the appCRD manager to handle this
+	mgr := svc.GetManagerByName(constants.AppManagerHandlerName)
+	if appMgr, ok := mgr.(*application.AppManager); ok {
+		return appMgr.HandleApplicationStateUpdate()
+	}
+	log.Logger().Warn("App manager is not registered",
+		zap.String("app manager name", constants.AppManagerHandlerName))
+	return func(obj interface{}) {
+		// noop
 	}
 }

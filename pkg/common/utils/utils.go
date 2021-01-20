@@ -15,6 +15,7 @@
  See the License for the specific language governing permissions and
  limitations under the License.
 */
+
 package utils
 
 import (
@@ -25,9 +26,11 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	apis "k8s.io/apimachinery/pkg/apis/meta/v1"
+	podv1 "k8s.io/kubernetes/pkg/api/v1/pod"
 
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common"
-	"github.com/apache/incubator-yunikorn-k8shim/pkg/conf"
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/constants"
+	"github.com/apache/incubator-yunikorn-scheduler-interface/lib/go/si"
 )
 
 func Convert2Pod(obj interface{}) (*v1.Pod, error) {
@@ -68,38 +71,60 @@ func IsAssignedPod(pod *v1.Pod) bool {
 }
 
 func GeneralPodFilter(pod *v1.Pod) bool {
-	return strings.Compare(pod.Spec.SchedulerName, conf.GetSchedulerConf().SchedulerName) == 0
+	return strings.Compare(pod.Spec.SchedulerName, constants.SchedulerName) == 0
 }
 
 func GetQueueNameFromPod(pod *v1.Pod) string {
-	queueName := common.ApplicationDefaultQueue
-	if an, ok := pod.Labels[common.LabelQueueName]; ok {
+	queueName := constants.ApplicationDefaultQueue
+	if an, ok := pod.Labels[constants.LabelQueueName]; ok {
 		queueName = an
 	}
 	return queueName
 }
 
 func GetApplicationIDFromPod(pod *v1.Pod) (string, error) {
-	for name, value := range pod.Labels {
-		// if a pod for spark already provided appID, reuse it
-		if name == common.SparkLabelAppID {
-			return value, nil
-		}
-
-		// application ID can be defined as a label
-		if name == common.LabelApplicationID {
-			return value, nil
-		}
-	}
-
-	// application ID can be defined in annotations too
+	// application ID can be defined in annotations
 	for name, value := range pod.Annotations {
-		if name == common.LabelApplicationID {
+		if name == constants.AnnotationApplicationID {
 			return value, nil
 		}
 	}
+
+	// application ID can be defined in labels
+	for name, value := range pod.Labels {
+		// application ID can be defined as a label
+		if name == constants.LabelApplicationID {
+			return value, nil
+		}
+
+		// if a pod for spark already provided appID, reuse it
+		if name == constants.SparkLabelAppID {
+			return value, nil
+		}
+	}
+
 	return "", fmt.Errorf("unable to retrieve application ID from pod spec, %s",
 		pod.Spec.String())
+}
+
+// compare the existing pod condition with the given one, return true if the pod condition remains not changed.
+// return false if pod has no condition set yet, or condition has changed.
+func PodUnderCondition(pod *v1.Pod, condition *v1.PodCondition) bool {
+	_, current := podv1.GetPodCondition(&pod.Status, condition.Type)
+	return current != nil && current.Status == condition.Status && current.Reason == condition.Reason
+}
+
+func GetNamespaceQuotaFromAnnotation(namespaceObj *v1.Namespace) *si.Resource {
+	// retrieve resource quota info from annotations
+	cpuQuota := namespaceObj.Annotations["yunikorn.apache.org/namespace.max.cpu"]
+	memQuota := namespaceObj.Annotations["yunikorn.apache.org/namespace.max.memory"]
+
+	// no quota found
+	if cpuQuota == "" && memQuota == "" {
+		return nil
+	}
+
+	return common.ParseResource(cpuQuota, memQuota)
 }
 
 type K8sResource struct {

@@ -18,7 +18,10 @@
 
 package cache
 
-import "github.com/apache/incubator-yunikorn-k8shim/pkg/common/events"
+import (
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/events"
+	"github.com/apache/incubator-yunikorn-scheduler-interface/lib/go/si"
+)
 
 // ------------------------
 // SimpleApplicationEvent simples moves application states
@@ -45,6 +48,39 @@ func (st SimpleApplicationEvent) GetArgs() []interface{} {
 
 func (st SimpleApplicationEvent) GetApplicationID() string {
 	return st.applicationID
+}
+
+// ------------------------
+// ApplicationStatusChangeEvent updates the status in the application CRD
+// ------------------------
+type ApplicationStatusChangeEvent struct {
+	applicationID string
+	event         events.ApplicationEventType
+	state         string
+}
+
+func NewApplicationStatusChangeEvent(appID string, eventType events.ApplicationEventType, state string) ApplicationStatusChangeEvent {
+	return ApplicationStatusChangeEvent{
+		applicationID: appID,
+		event:         eventType,
+		state:         state,
+	}
+}
+
+func (st ApplicationStatusChangeEvent) GetEvent() events.ApplicationEventType {
+	return st.event
+}
+
+func (st ApplicationStatusChangeEvent) GetArgs() []interface{} {
+	return nil
+}
+
+func (st ApplicationStatusChangeEvent) GetApplicationID() string {
+	return st.applicationID
+}
+
+func (st ApplicationStatusChangeEvent) GetState() string {
+	return st.state
 }
 
 // ------------------------
@@ -126,4 +162,65 @@ func (fe FailApplicationEvent) GetArgs() []interface{} {
 
 func (fe FailApplicationEvent) GetApplicationID() string {
 	return fe.applicationID
+}
+
+// ------------------------
+// Reservation Update Event
+// ------------------------
+type UpdateApplicationReservationEvent struct {
+	applicationID string
+	event         events.ApplicationEventType
+}
+
+func NewUpdateApplicationReservationEvent(appID string) UpdateApplicationReservationEvent {
+	return UpdateApplicationReservationEvent{
+		applicationID: appID,
+		event:         events.UpdateReservation,
+	}
+}
+
+func (ue UpdateApplicationReservationEvent) GetEvent() events.ApplicationEventType {
+	return ue.event
+}
+
+func (ue UpdateApplicationReservationEvent) GetArgs() []interface{} {
+	return nil
+}
+
+func (ue UpdateApplicationReservationEvent) GetApplicationID() string {
+	return ue.applicationID
+}
+
+// ------------------------
+// Release application allocations
+// ------------------------
+type ReleaseAppAllocationEvent struct {
+	applicationID   string
+	allocationUUID  string
+	terminationType string
+	event           events.ApplicationEventType
+}
+
+func NewReleaseAppAllocationEvent(appID string, allocTermination si.AllocationRelease_TerminationType, uuid string) ReleaseAppAllocationEvent {
+	return ReleaseAppAllocationEvent{
+		applicationID:   appID,
+		allocationUUID:  uuid,
+		terminationType: si.AllocationRelease_TerminationType_name[int32(allocTermination)],
+		event:           events.ReleaseAppAllocation,
+	}
+}
+
+func (re ReleaseAppAllocationEvent) GetApplicationID() string {
+	return re.applicationID
+}
+
+func (re ReleaseAppAllocationEvent) GetArgs() []interface{} {
+	args := make([]interface{}, 2)
+	args[0] = re.allocationUUID
+	args[1] = re.terminationType
+	return args
+}
+
+func (re ReleaseAppAllocationEvent) GetEvent() events.ApplicationEventType {
+	return re.event
 }

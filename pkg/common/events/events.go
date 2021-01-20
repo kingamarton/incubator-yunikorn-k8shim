@@ -33,15 +33,19 @@ type SchedulingEvent interface {
 type ApplicationEventType string
 
 const (
-	SubmitApplication   ApplicationEventType = "SubmitApplication"
-	RecoverApplication  ApplicationEventType = "RecoverApplication"
-	AcceptApplication   ApplicationEventType = "AcceptApplication"
-	RunApplication      ApplicationEventType = "RunApplication"
-	RejectApplication   ApplicationEventType = "RejectApplication"
-	CompleteApplication ApplicationEventType = "CompleteApplication"
-	FailApplication     ApplicationEventType = "FailApplication"
-	KillApplication     ApplicationEventType = "KillApplication"
-	KilledApplication   ApplicationEventType = "KilledApplication"
+	SubmitApplication    ApplicationEventType = "SubmitApplication"
+	RecoverApplication   ApplicationEventType = "RecoverApplication"
+	AcceptApplication    ApplicationEventType = "AcceptApplication"
+	TryReserve           ApplicationEventType = "TryReserve"
+	UpdateReservation    ApplicationEventType = "UpdateReservation"
+	RunApplication       ApplicationEventType = "RunApplication"
+	RejectApplication    ApplicationEventType = "RejectApplication"
+	CompleteApplication  ApplicationEventType = "CompleteApplication"
+	FailApplication      ApplicationEventType = "FailApplication"
+	KillApplication      ApplicationEventType = "KillApplication"
+	KilledApplication    ApplicationEventType = "KilledApplication"
+	ReleaseAppAllocation ApplicationEventType = "ReleaseAppAllocation"
+	AppStateChange       ApplicationEventType = "ApplicationStateChange"
 )
 
 type ApplicationEvent interface {
@@ -56,6 +60,13 @@ type ApplicationEvent interface {
 	// an event can have multiple arguments, these arguments will be passed to
 	// state machines' callbacks when doing state transition
 	GetArgs() []interface{}
+}
+
+// ------------------------
+// ApplicationStatusEvent updates the status in the application CRD
+// ------------------------
+type ApplicationStatusEvent interface {
+	GetState() string
 }
 
 //----------------------------------------------

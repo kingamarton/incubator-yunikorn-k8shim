@@ -25,13 +25,14 @@ import (
 
 	"go.uber.org/zap"
 	"gotest.tools/assert"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 
 	"github.com/apache/incubator-yunikorn-core/pkg/api"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/appmgmt"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/cache"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/client"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common"
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/constants"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/events"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/test"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/log"
@@ -65,18 +66,16 @@ partitions:
 	cluster.waitForSchedulerState(t, events.States().Scheduler.Running)
 
 	// register nodes
-	if err := cluster.addNode("test.host.01", 100, 10); err != nil {
-		t.Fatalf("add node failed %v", err)
-	}
-	if err := cluster.addNode("test.host.02", 100, 10); err != nil {
-		t.Fatalf("add node failed %v", err)
-	}
+	err := cluster.addNode("test.host.01", 100, 10)
+	assert.NilError(t, err, "add node failed")
+	err = cluster.addNode("test.host.02", 100, 10)
+	assert.NilError(t, err, "add node failed")
 
 	// create app and tasks
 	cluster.addApplication("app0001", "root.a")
 	taskResource := common.NewResourceBuilder().
-		AddResource(common.Memory, 10).
-		AddResource(common.CPU, 1).
+		AddResource(constants.Memory, 10).
+		AddResource(constants.CPU, 1).
 		Build()
 	cluster.addTask("app0001", "task0001", taskResource)
 	cluster.addTask("app0001", "task0002", taskResource)
@@ -115,36 +114,38 @@ partitions:
 	cluster.waitForSchedulerState(t, events.States().Scheduler.Running)
 
 	// register nodes
-	if err := cluster.addNode("test.host.01", 100, 10); err != nil {
-		t.Fatalf("%v", err)
-	}
-	if err := cluster.addNode("test.host.02", 100, 10); err != nil {
-		t.Fatalf("%v", err)
-	}
+	err := cluster.addNode("test.host.01", 100, 10)
+	assert.NilError(t, err)
+	err = cluster.addNode("test.host.02", 100, 10)
+	assert.NilError(t, err)
 
 	// add app to context
-	cluster.addApplication("app0001", "root.non_exist_queue")
+	appID := "app0001"
+	cluster.addApplication(appID, "root.non_exist_queue")
 
 	// create app and tasks
 	taskResource := common.NewResourceBuilder().
-		AddResource(common.Memory, 10).
-		AddResource(common.CPU, 1).
+		AddResource(constants.Memory, 10).
+		AddResource(constants.CPU, 1).
 		Build()
-	cluster.addTask("app0001", "task0001", taskResource)
+	cluster.addTask(appID, "task0001", taskResource)
 
 	// wait for scheduling app and tasks
 	// verify app state
-	cluster.waitAndAssertApplicationState(t, "app0001", events.States().Application.Failed)
+	cluster.waitAndAssertApplicationState(t, appID, events.States().Application.Failed)
 
 	// remove the application
-	err := cluster.removeApplication("app0001")
+	// remove task first or removeApplication will fail
+	err = cluster.context.RemoveTask(appID, "task0001")
+	assert.Assert(t, err == nil)
+	err = cluster.removeApplication(appID)
 	assert.Assert(t, err == nil)
 
 	// submit the app again
-	cluster.addApplication("app0001", "root.a")
-	cluster.addTask("app0001", "task0001", taskResource)
-	cluster.waitAndAssertApplicationState(t, "app0001", events.States().Application.Running)
-	cluster.waitAndAssertTaskState(t, "app0001", "task0001", events.States().Task.Bound)
+	cluster.addApplication(appID, "root.a")
+	cluster.addTask(appID, "task0001", taskResource)
+	cluster.waitAndAssertApplicationState(t, appID, events.States().Application.Running)
+	cluster.waitAndAssertTaskState(t, appID, "task0001", events.States().Task.Bound)
 }
 
 func TestSchedulerRegistrationFailed(t *testing.T) {
@@ -164,9 +165,8 @@ func TestSchedulerRegistrationFailed(t *testing.T) {
 	shim.run()
 	defer shim.stop()
 
-	if err := waitShimSchedulerState(shim, events.States().Scheduler.Stopped, 5*time.Second); err != nil {
-		t.Fatalf("%v", err)
-	}
+	err := waitShimSchedulerState(shim, events.States().Scheduler.Stopped, 5*time.Second)
+	assert.NilError(t, err)
 }
 
 func TestTaskFailures(t *testing.T) {
@@ -207,18 +207,16 @@ partitions:
 	cluster.waitForSchedulerState(t, events.States().Scheduler.Running)
 
 	// register nodes
-	if err := cluster.addNode("test.host.01", 100, 10); err != nil {
-		t.Fatalf("add node failed %v", err)
-	}
-	if err := cluster.addNode("test.host.02", 100, 10); err != nil {
-		t.Fatalf("add node failed %v", err)
-	}
+	err := cluster.addNode("test.host.01", 100, 10)
+	assert.NilError(t, err, "add node failed")
+	err = cluster.addNode("test.host.02", 100, 10)
+	assert.NilError(t, err, "add node failed")
 
 	// create app and tasks
 	cluster.addApplication("app0001", "root.a")
 	taskResource := common.NewResourceBuilder().
-		AddResource(common.Memory, 50).
-		AddResource(common.CPU, 5).
+		AddResource(constants.Memory, 50).
+		AddResource(constants.CPU, 5).
 		Build()
 	cluster.addTask("app0001", "task0001", taskResource)
 	cluster.addTask("app0001", "task0002", taskResource)
@@ -230,17 +228,16 @@ partitions:
 	cluster.waitAndAssertTaskState(t, "app0001", "task0002", events.States().Task.Bound)
 
 	// one task get bound, one ask failed, so we are expecting only 1 allocation in the scheduler
-	if err := cluster.waitAndVerifySchedulerAllocations("root.a",
-		"[my-kube-cluster]default", "app0001", 1); err != nil {
-		t.Fatalf("number of allocations is not expected, error: %v", err)
-	}
+	err = cluster.waitAndVerifySchedulerAllocations("root.a",
+		"[my-kube-cluster]default", "app0001", 1)
+	assert.NilError(t, err, "number of allocations is not expected, error")
 }
 
 func waitShimSchedulerState(shim *KubernetesShim, expectedState string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
 		if shim.GetSchedulerState() == expectedState {
-			log.Logger.Info("waiting for state",
+			log.Logger().Info("waiting for state",
 				zap.String("expect", expectedState),
 				zap.String("current", shim.GetSchedulerState()))
 			return nil

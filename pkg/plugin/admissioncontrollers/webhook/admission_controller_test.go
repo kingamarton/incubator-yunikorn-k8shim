@@ -20,6 +20,10 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -27,7 +31,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/apache/incubator-yunikorn-k8shim/pkg/common"
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/constants"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/conf"
 )
 
@@ -54,7 +58,7 @@ func TestUpdateLabels(t *testing.T) {
 		Status: v1.PodStatus{},
 	}
 
-	patch = updateLabels(pod, patch)
+	patch = updateLabels("default", pod, patch)
 
 	assert.Equal(t, len(patch), 1)
 	assert.Equal(t, patch[0].Op, "add")
@@ -63,7 +67,7 @@ func TestUpdateLabels(t *testing.T) {
 		assert.Equal(t, len(updatedMap), 3)
 		assert.Equal(t, updatedMap["random"], "random")
 		assert.Equal(t, updatedMap["queue"], "root.default")
-		assert.Equal(t, strings.HasPrefix(updatedMap["applicationId"], "a-test-pod"), true)
+		assert.Equal(t, strings.HasPrefix(updatedMap["applicationId"], autoGenAppPrefix), true)
 	} else {
 		t.Fatal("patch info content is not as expected")
 	}
@@ -90,8 +94,7 @@ func TestUpdateLabels(t *testing.T) {
 		Spec:   v1.PodSpec{},
 		Status: v1.PodStatus{},
 	}
-
-	patch = updateLabels(pod, patch)
+	patch = updateLabels("default", pod, patch)
 
 	assert.Equal(t, len(patch), 1)
 	assert.Equal(t, patch[0].Op, "add")
@@ -128,7 +131,7 @@ func TestUpdateLabels(t *testing.T) {
 		Status: v1.PodStatus{},
 	}
 
-	patch = updateLabels(pod, patch)
+	patch = updateLabels("default", pod, patch)
 
 	assert.Equal(t, len(patch), 1)
 	assert.Equal(t, patch[0].Op, "add")
@@ -137,7 +140,7 @@ func TestUpdateLabels(t *testing.T) {
 		assert.Equal(t, len(updatedMap), 3)
 		assert.Equal(t, updatedMap["random"], "random")
 		assert.Equal(t, updatedMap["queue"], "root.abc")
-		assert.Equal(t, strings.HasPrefix(updatedMap["applicationId"], "a-test-pod"), true)
+		assert.Equal(t, strings.HasPrefix(updatedMap["applicationId"], autoGenAppPrefix), true)
 	} else {
 		t.Fatal("patch info content is not as expected")
 	}
@@ -160,7 +163,7 @@ func TestUpdateLabels(t *testing.T) {
 		Status: v1.PodStatus{},
 	}
 
-	patch = updateLabels(pod, patch)
+	patch = updateLabels("default", pod, patch)
 
 	assert.Equal(t, len(patch), 1)
 	assert.Equal(t, patch[0].Op, "add")
@@ -168,7 +171,7 @@ func TestUpdateLabels(t *testing.T) {
 	if updatedMap, ok := patch[0].Value.(map[string]string); ok {
 		assert.Equal(t, len(updatedMap), 2)
 		assert.Equal(t, updatedMap["queue"], "root.default")
-		assert.Equal(t, strings.HasPrefix(updatedMap["applicationId"], "a-test-pod"), true)
+		assert.Equal(t, strings.HasPrefix(updatedMap["applicationId"], autoGenAppPrefix), true)
 	} else {
 		t.Fatal("patch info content is not as expected")
 	}
@@ -188,7 +191,7 @@ func TestUpdateLabels(t *testing.T) {
 		Status: v1.PodStatus{},
 	}
 
-	patch = updateLabels(pod, patch)
+	patch = updateLabels("default", pod, patch)
 
 	assert.Equal(t, len(patch), 1)
 	assert.Equal(t, patch[0].Op, "add")
@@ -196,7 +199,7 @@ func TestUpdateLabels(t *testing.T) {
 	if updatedMap, ok := patch[0].Value.(map[string]string); ok {
 		assert.Equal(t, len(updatedMap), 2)
 		assert.Equal(t, updatedMap["queue"], "root.default")
-		assert.Equal(t, strings.HasPrefix(updatedMap["applicationId"], "some-pod-"), true)
+		assert.Equal(t, strings.HasPrefix(updatedMap["applicationId"], autoGenAppPrefix), true)
 	} else {
 		t.Fatal("patch info content is not as expected")
 	}
@@ -214,7 +217,7 @@ func TestUpdateLabels(t *testing.T) {
 		Status:     v1.PodStatus{},
 	}
 
-	patch = updateLabels(pod, patch)
+	patch = updateLabels("default", pod, patch)
 
 	assert.Equal(t, len(patch), 1)
 	assert.Equal(t, patch[0].Op, "add")
@@ -222,7 +225,7 @@ func TestUpdateLabels(t *testing.T) {
 	if updatedMap, ok := patch[0].Value.(map[string]string); ok {
 		assert.Equal(t, len(updatedMap), 2)
 		assert.Equal(t, updatedMap["queue"], "root.default")
-		assert.Equal(t, strings.HasPrefix(updatedMap["applicationId"], "unknown"), true)
+		assert.Equal(t, strings.HasPrefix(updatedMap["applicationId"], autoGenAppPrefix), true)
 	} else {
 		t.Fatal("patch info content is not as expected")
 	}
@@ -235,7 +238,7 @@ func TestUpdateSchedulerName(t *testing.T) {
 	assert.Equal(t, patch[0].Op, "add")
 	assert.Equal(t, patch[0].Path, "/spec/schedulerName")
 	if name, ok := patch[0].Value.(string); ok {
-		assert.Equal(t, name, "yunikorn")
+		assert.Equal(t, name, constants.SchedulerName)
 	} else {
 		t.Fatal("patch info content is not as expected")
 	}
@@ -248,7 +251,7 @@ func TestValidateConfigMap(t *testing.T) {
 	}
 	configmap := &v1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: common.DefaultConfigMapName,
+			Name: constants.DefaultConfigMapName,
 		},
 		Data: make(map[string]string),
 	}
@@ -259,20 +262,142 @@ func TestValidateConfigMap(t *testing.T) {
 	// skip further validations which depends on the webservice of yunikorn-core
 }
 
+const ConfigData = `
+partitions:
+  - name: default
+    placementrules:
+        - name: tag
+          value: namespace
+          create: true
+    queues:
+      - name: root
+        submitacl: "*"
+`
+
+/**
+Test for the case when the POST request is successful, and the config change is allowed.
+*/
+func TestValidateConfigMapValidConfig(t *testing.T) {
+	configmap := prepareConfigMap(ConfigData)
+	srv := serverMock(true)
+	defer srv.Close()
+	// both server and url pattern contains http://, so we need to delete one
+	controller := prepareController(strings.Replace(srv.URL, "http://", "", 1))
+	err := controller.validateConfigMap(configmap)
+	assert.NilError(t, err, "No error expected")
+}
+
+/**
+Test for the case when the POST request is successful, but the config change is not allowed.
+*/
+func TestValidateConfigMapInValidConfig(t *testing.T) {
+	configmap := prepareConfigMap(ConfigData)
+	srv := serverMock(false)
+	defer srv.Close()
+	// both server and url pattern contains http://, so we need to delete one
+	controller := prepareController(strings.Replace(srv.URL, "http://", "", 1))
+	err := controller.validateConfigMap(configmap)
+	assert.Equal(t, "Invalid config", err.Error(),
+		"Other error returned than the expected one")
+}
+
+/**
+Test for the case when the POST request fails
+*/
+func TestValidateConfigMapWrongRequest(t *testing.T) {
+	configmap := prepareConfigMap(ConfigData)
+	srv := serverMock(false)
+	defer srv.Close()
+	// the url is wrong, so the POST request will fail and an error will be returned
+	controller := prepareController(srv.URL)
+	err := controller.validateConfigMap(configmap)
+	assert.Equal(t, true, strings.Contains(err.Error(), "no such host"),
+		"Other error returned than the expected one")
+}
+
+func prepareConfigMap(data string) *v1.ConfigMap {
+	configmap := &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: constants.DefaultConfigMapName,
+		},
+		Data: map[string]string{"queues.yaml": data},
+	}
+	return configmap
+}
+
+func prepareController(url string) *admissionController {
+	configName := fmt.Sprintf("%s.yaml", conf.DefaultPolicyGroup)
+	controller := &admissionController{
+		configName: configName,
+	}
+	controller.schedulerValidateConfURL = fmt.Sprintf(schedulerValidateConfURLPattern, url)
+	return controller
+}
+
+func serverMock(valid bool) *httptest.Server {
+	handler := http.NewServeMux()
+	if valid {
+		handler.HandleFunc("/ws/v1/validate-conf", successResponseMock)
+	} else {
+		handler.HandleFunc("/ws/v1/validate-conf", failedResponseMock)
+	}
+	srv := httptest.NewServer(handler)
+	return srv
+}
+
+func successResponseMock(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(200)
+	resp := `{
+		"allowed": true,
+		"reason": ""
+		}`
+	w.Write([]byte(resp)) //nolint:errcheck
+}
+
+func failedResponseMock(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(200)
+	resp := `{
+		"allowed": false,
+		"reason": "Invalid config"
+		}`
+	w.Write([]byte(resp)) //nolint:errcheck
+}
+
 func TestGenerateAppID(t *testing.T) {
-	appID := generateAppID("this-is-a-pod-name")
-	assert.Equal(t, strings.HasPrefix(appID, "this-is-a-pod-name"), true)
-	assert.Equal(t, len(appID), 38)
+	appID := generateAppID("")
+	assert.Equal(t, strings.HasPrefix(appID, fmt.Sprintf("%s-default", autoGenAppPrefix)), true)
+	assert.Equal(t, len(appID), 24)
+
+	appID = generateAppID("this-is-a-namespace")
+	assert.Equal(t, strings.HasPrefix(appID, fmt.Sprintf("%s-this-is-a-namespace", autoGenAppPrefix)), true)
+	assert.Equal(t, len(appID), 36)
 
 	appID = generateAppID("short")
-	assert.Equal(t, strings.HasPrefix(appID, "short"), true)
-	assert.Equal(t, len(appID), 25)
+	assert.Equal(t, strings.HasPrefix(appID, fmt.Sprintf("%s-short", autoGenAppPrefix)), true)
+	assert.Equal(t, len(appID), 22)
 
 	appID = generateAppID(strings.Repeat("long", 100))
-	assert.Equal(t, strings.HasPrefix(appID, "long"), true)
+	assert.Equal(t, strings.HasPrefix(appID, fmt.Sprintf("%s-long", autoGenAppPrefix)), true)
 	assert.Equal(t, len(appID), 63)
+}
 
-	appID = generateAppID("monitoring-prometheus-kube-state-metrics-6484fd9764-ql2w4")
-	assert.Equal(t, strings.HasPrefix(appID, "monitoring-prometheus"), true)
-	assert.Equal(t, len(appID), 63)
+func TestIsConfigMapUpdateAllowed(t *testing.T) {
+	testCases := []struct {
+		name             string
+		allowed          bool
+		userInfo         string
+		enableHotRefresh bool
+	}{
+		{"Hot refresh enabled, yunikorn user", true, "default:yunikorn-admin", true},
+		{"Hot refresh enabled, non yunikorn user", true, "default:some-user", true},
+		{"Hot refresh disabled, non yunikorn user", false, "default:some-user", false},
+		{"Hot refresh disabled, yunikorn user", true, "default:yunikorn-admin", false},
+	}
+	for _, tc := range testCases {
+		os.Setenv(enableConfigHotRefreshEnvVar, strconv.FormatBool(tc.enableHotRefresh))
+		t.Run(tc.name, func(t *testing.T) {
+			allowed := isConfigMapUpdateAllowed(tc.userInfo)
+			assert.Equal(t, tc.allowed, allowed, "")
+		})
+	}
 }
